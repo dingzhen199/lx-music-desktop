@@ -62,8 +62,8 @@
       <div :class="$style.pathWrap">
         <div :class="$style.pathTitle">{{ t('explore__path') }}</div>
         <div v-if="!sessionView.path.length" :class="$style.pathEmpty">{{ t('explore__path_empty') }}</div>
-        <div v-for="(item, index) in sessionView.path" :key="item.id ?? `path-${index}`" :class="[$style.pathItem, { [$style.current]: item.isCurrent, [$style.played]: item.state === 'played' }]">
-          <div :class="$style.pathIndex">{{ index + 1 }}</div>
+        <div v-for="item in pathItems" :key="item.key" :class="[$style.pathItem, { [$style.current]: item.isCurrent, [$style.played]: item.state === 'played' }]">
+          <div :class="$style.pathIndex">{{ item.no }}</div>
           <div :class="$style.pathMain">
             <div :class="$style.pathName">
               <span :class="$style.title">{{ item.title }}</span>
@@ -105,6 +105,9 @@ watch(() => sessionView.value.active, (active) => {
 })
 
 const hasPlaying = computed(() => Boolean(playMusicInfo.musicInfo?.id))
+
+// 路径列表视图项：预计算序号与稳定 key，避免模板内模板字符串/索引运算（dev ts-loader 类型检查）
+const pathItems = computed(() => sessionView.value.path.map((item, i) => ({ ...item, no: i + 1, key: item.id ?? `path-${i}` })))
 
 const distanceWords = computed(() => {
   const radius = sessionView.value.radius
