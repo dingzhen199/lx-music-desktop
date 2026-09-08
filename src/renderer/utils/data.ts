@@ -108,23 +108,25 @@ export const setListUpdateInfo = async(info: LX.List.ListUpdateInfo) => {
   listUpdateInfo = info
   saveListUpdateInfo()
 }
+// 记录不存在时按“默认参与启动自动更新”补建（与启动谓词 isAutoUpdate !== false 保持一致）
+const getOrCreateListUpdateInfo = (id: string): LX.List.ListUpdateInfo[string] => listUpdateInfo[id] ?? { updateTime: 0, isAutoUpdate: true }
 export const setListAutoUpdate = async(id: string, enable: boolean) => {
   await initListUpdateInfo()
-  const targetInfo = listUpdateInfo[id] ?? { updateTime: 0, isAutoUpdate: false }
+  const targetInfo = getOrCreateListUpdateInfo(id)
   targetInfo.isAutoUpdate = enable
   listUpdateInfo[id] = targetInfo
   saveListUpdateInfo()
 }
 export const setListUpdateTime = async(id: string, time: number) => {
   await initListUpdateInfo()
-  const targetInfo = listUpdateInfo[id] ?? { updateTime: 0, isAutoUpdate: false }
+  const targetInfo = getOrCreateListUpdateInfo(id)
   targetInfo.updateTime = time
   listUpdateInfo[id] = targetInfo
   saveListUpdateInfo()
 }
 export const setListUpdateError = async(id: string, error: string | null) => {
   await initListUpdateInfo()
-  const targetInfo = listUpdateInfo[id] ?? { updateTime: 0, isAutoUpdate: false }
+  const targetInfo = getOrCreateListUpdateInfo(id)
   targetInfo.updateError = error
   targetInfo.updateErrorAt = error == null ? null : Date.now()
   listUpdateInfo[id] = targetInfo

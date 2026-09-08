@@ -59,6 +59,17 @@ export default {
 
     const loadUpdateInfo = async() => {
       updateInfo.value = await getListUpdateInfo()
+      // if (listUpdateTimes._inited) {
+      //   for (const [id, value] of Object.entries(info)) {
+      //     autoUpdate[id] = value.isAutoUpdate == true
+      //   }
+      // } else {
+      //   for (const [id, value] of Object.entries(info)) {
+      //     autoUpdate[id] = value.isAutoUpdate == true
+      //     listUpdateTimes[id] = value.updateTime ? dateFormat(value.updateTime) : ''
+      //   }
+      // }
+      // listUpdateTimes._inited = true
     }
     void loadUpdateInfo()
     // 打开弹窗时重新读取，展示最新的更新状态（如启动自动更新产生的失败标记）
