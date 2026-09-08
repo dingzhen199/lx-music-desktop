@@ -56,6 +56,15 @@ export default {
           enable: true,
         },
         {
+          to: '/explore',
+          tips: t('explore'),
+          icon: '#icon-explore',
+          iconSize: '0 0 512 512',
+          size,
+          name: 'Explore',
+          enable: true,
+        },
+        {
           to: '/list',
           tips: t('my_list'),
           icon: '#icon-love',

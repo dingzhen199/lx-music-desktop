@@ -690,6 +690,41 @@ declare global {
        * 是否在离开搜索界面时自动清空搜索结果列表
        */
       'odc.isAutoClearSearchList': boolean
+
+      /**
+       * 是否启用推荐引擎的 AI 分析与排序（关闭或 Key 为空时引擎走本地排序）
+       */
+      'ai.enable': boolean
+
+      /**
+       * 推荐引擎 AI 协议
+       */
+      'ai.provider': 'openai-compatible' | 'anthropic'
+
+      /**
+       * 推荐引擎 AI 服务地址（如 https://api.openai.com/v1 或 https://api.anthropic.com/v1）
+       */
+      'ai.baseUrl': string
+
+      /**
+       * 推荐引擎 AI 密钥（仅运行时使用，不写入仓库与日志）
+       */
+      'ai.apiKey': string
+
+      /**
+       * 推荐引擎 AI 模型名
+       */
+      'ai.model': string
+
+      /**
+       * 推荐会话默认探索距离（10-90）
+       */
+      'recommend.radius': number
+
+      /**
+       * 推荐会话队列剩余不多时是否自动续补
+       */
+      'recommend.autoRefill': boolean
     }
   }
 

@@ -55,6 +55,14 @@ const router = createRouter({
       },
     },
     {
+      path: '/explore',
+      name: 'Explore',
+      component: require('./views/Explore/index.vue').default,
+      meta: {
+        name: 'Explore',
+      },
+    },
+    {
       path: '/setting',
       name: 'Setting',
       component: require('./views/Setting/index.vue').default,

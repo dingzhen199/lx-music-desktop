@@ -1,6 +1,11 @@
 <template>
   <div :class="$style.controlBtn">
     <!-- <common-volume-bar /> -->
+    <button :class="$style.titleBtn" :disabled="!musicInfo.id" :aria-label="$t('explore__start')" @click="handleStartExplore">
+      <svg version="1.1" xmlns="http://www.w3.org/2000/svg" xlink="http://www.w3.org/1999/xlink" height="100%" viewBox="0 0 512 512" space="preserve">
+        <use xlink:href="#icon-explore" />
+      </svg>
+    </button>
     <button :class="$style.titleBtn" :aria-label="$t('player__add_music_to')" @click="addMusicTo">
       <svg version="1.1" xmlns="http://www.w3.org/2000/svg" xlink="http://www.w3.org/1999/xlink" width="90%" viewBox="0 0 512 512" space="preserve">
         <use xlink:href="#icon-add-2" />
@@ -25,9 +30,12 @@ import { ref } from '@common/utils/vueTools'
 import useToggleDesktopLyric from '@renderer/utils/compositions/useToggleDesktopLyric'
 import { musicInfo, playMusicInfo } from '@renderer/store/player/state'
 import { appSetting } from '@renderer/store/setting'
+import { useRouter } from '@common/utils/vueRouter'
+import { startSession } from '@renderer/core/recommend/session'
 
 export default {
   setup() {
+    const router = useRouter()
     const isShowAddMusicTo = ref(false)
     const {
       toggleDesktopLyricBtnTitle,
@@ -38,6 +46,14 @@ export default {
       if (!musicInfo.id) return
       isShowAddMusicTo.value = true
     }
+    const handleStartExplore = () => {
+      if (!musicInfo.id) return
+      // 先跳转页面再开始会话（初始计划较慢，页面负责展示进度/错误）
+      void router.push('/explore')
+      void startSession().catch(err => {
+        console.warn('[explore] 开始会话失败', err)
+      })
+    }
     return {
       appSetting,
       isShowAddMusicTo,
@@ -46,6 +62,7 @@ export default {
       toggleLockDesktopLyric,
       addMusicTo,
       playMusicInfo,
+      handleStartExplore,
     }
   },
 }
@@ -94,6 +111,10 @@ export default {
   }
   &:active {
     opacity: 1;
+  }
+  &[disabled] {
+    opacity: .3;
+    cursor: default;
   }
 }
 

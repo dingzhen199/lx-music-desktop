@@ -38,7 +38,7 @@ import {
   buildRankingPrompt,
   normalizeAnalysis,
 } from './prompts'
-import type { AnchorLike, RankCandidateInput, TrackAnalysis } from './prompts'
+import type { AnchorLike, RankCandidateInput, RankPathInput, TrackAnalysis } from './prompts'
 import { recallCandidates } from './recall'
 import type { RecallAnchor, RecallCandidate } from './recall'
 
@@ -48,6 +48,14 @@ export interface AiConfig {
   baseUrl?: string
   apiKey: string
   model: string
+}
+
+/**
+ * 会话锚点（T-B2）：会话中途切歌后 replan 仍沿起点，不受当前播放曲目影响。
+ * singer/name/id 供召回使用；缺省时 exploreOnce 取当前播放歌曲。
+ */
+export interface ExploreAnchor extends RecallAnchor {
+  album?: string
 }
 
 /** exploreOnce 选项。 */
@@ -60,10 +68,22 @@ export interface ExploreOptions {
   excludes?: string
   /** AI 配置；缺省或未提供 apiKey 时不做 LLM（分析/排序走本地回退）。 */
   ai?: AiConfig
+  /** 会话锚点覆盖（T-B2 replan 用；缺省取当前播放歌曲）。 */
+  anchor?: ExploreAnchor
+  /** 复用起点分析（跳过分析步骤；T-B2 续补沿会话语义，也省一次 LLM 分析）。 */
+  reuseAnalysis?: TrackAnalysis
+  /** 队列追加模式：top=置顶（默认/首计划），bottom=追加队尾（续补）。 */
+  appendMode?: 'top' | 'bottom'
+  /** 已推荐过的候选 id（续补时避免重复入队）。 */
+  excludeIds?: string[]
+  /** 最近路径（已播/已计划，供 AI 排序提示词延续弧线）。 */
+  recentPath?: RankPathInput[]
 }
 
 /** 对外返回的单条候选视图。 */
 export interface ExploreItemView {
+  /** 候选 id（用于会话路径/剩余统计）。 */
+  id: string | null
   artist: string
   title: string
   album: string
@@ -81,6 +101,8 @@ export interface ExploreResult {
   position: string
   featureSheet: FeatureSheet
   analysis: { summary: string, aiUsed: boolean, error: string | null }
+  /** 起点分析的完整结构（T-B2 会话续补时作为 reuseAnalysis 复用）。 */
+  rawAnalysis: TrackAnalysis
   candidates: ExploreItemView[]
   meta: {
     sourceCounts: Record<string, number>
@@ -185,6 +207,7 @@ const aiRank = async(
   excludes: string,
   analysis: TrackAnalysis,
   constraints: LanguageConstraints,
+  recentPath: RankPathInput[] = [],
 ): Promise<RecallCandidate[]> => {
   const eligible = pool.filter(t => eligibleByFormat(t, analysis, stateWords, excludes) && !exclusionHit(t, excludes))
   const candidates = eligible.slice(0, 48)
@@ -197,6 +220,7 @@ const aiRank = async(
     instruction,
     analysis,
     candidates: candidates as RankCandidateInput[],
+    recentPath: recentPath.length ? recentPath : undefined,
   })
   const content = await callAi(ai, RANK_SYSTEM, prompt)
   const parsed = parseLooseJson(content)
@@ -306,21 +330,25 @@ const localRank = (
 /** 当前播放歌曲 → 特征事实单 →（可选 LLM 分析）→ 跨源召回 →（LLM 或本地）排序 → 守门 → 弧线 → 稍后播放。 */
 export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreResult> => {
   const playMusic = playMusicInfo.musicInfo
-  if (!playMusic) throw new Error('请先播放歌曲')
+  const playAnchor = playMusic ? ('progress' in playMusic ? playMusic.metadata.musicInfo : playMusic) : null
+  // T-B2：会话锚点覆盖优先（replan 沿起点继续）；缺省取当前播放歌曲（T-B1 行为不变）。
+  const anchorInfo: any = options.anchor ?? playAnchor
+  if (!anchorInfo) throw new Error('请先播放歌曲')
 
-  const anchorInfo = 'progress' in playMusic ? playMusic.metadata.musicInfo : playMusic
   const anchor: AnchorLike = {
-    artist: anchorInfo.singer || '(未知艺人)',
-    title: anchorInfo.name || '(未知曲目)',
-    album: anchorInfo.meta?.albumName ?? '',
+    artist: anchorInfo.singer || anchorInfo.artist || '(未知艺人)',
+    title: anchorInfo.name || anchorInfo.title || '(未知曲目)',
+    album: anchorInfo.album ?? anchorInfo.meta?.albumName ?? '',
   }
-  const recallAnchor: RecallAnchor = {
-    artist: anchor.artist,
-    title: anchor.title,
-    singer: anchorInfo.singer,
-    name: anchorInfo.name,
-    id: anchorInfo.id,
-  }
+  const recallAnchor: RecallAnchor = options.anchor
+    ? { ...options.anchor }
+    : {
+        artist: anchor.artist,
+        title: anchor.title,
+        singer: anchorInfo.singer,
+        name: anchorInfo.name,
+        id: anchorInfo.id,
+      }
   const radius = Math.max(1, Math.min(100, Number(options.radius ?? session.radius) || 35))
   const stateWords = options.instruction ?? session.stateWords
   const excludes = options.excludes ?? session.excludes
@@ -336,12 +364,14 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
     featureSheet = await collector.sampleOnce()
   }
 
-  // 2. 可选 LLM 分析（失败回退本地分析，不抛错）
+  // 2. 可选 LLM 分析（失败回退本地分析，不抛错；T-B2 续补时复用会话起步时的分析）
   let analysis: TrackAnalysis
   let aiUsed = false
   let aiAnalysisError: string | null = null
   const instruction = [stateWords, excludes ? `不要：${excludes}` : '', constraintPrompt(constraints)].filter(Boolean).join('；')
-  if (options.ai?.apiKey) {
+  if (options.reuseAnalysis) {
+    analysis = options.reuseAnalysis
+  } else if (options.ai?.apiKey) {
     try {
       // 特征事实单以“追加段”方式拼接在 T-B0 提示词之外，不改动 prompts.ts。
       const prompt = `${buildAnchorAnalysisPrompt({ anchor, radius, instruction })}\n\n音频特征事实单：\n${featureSheet.text}\n你在这里：${playProgress.nowPlayTimeStr}`
@@ -361,7 +391,9 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
   const recall = await recallCandidates(recallAnchor, analysis, radius, {
     excludedLanguages: constraints.excludedLanguages,
   })
-  const pool = recall.items
+  // T-B2：续补时排除本会话已推荐过的候选，避免重复入队。
+  const excludeSet = new Set((options.excludeIds ?? []).map(id => String(id)))
+  const pool = recall.items.filter(t => !excludeSet.has(String(t.encryptedId)))
   if (!pool.length) {
     throw new Error(constraints.excludedLanguages?.length
       ? '当前硬约束下没有找到可用候选。不会退回被你排除的音乐来凑数，请稍后重试。'
@@ -374,7 +406,7 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
   let aiRankError: string | null = null
   if (options.ai?.apiKey) {
     try {
-      const aiRanked = await aiRank(options.ai, pool, anchor, radius, stateWords, activeExcludes, analysis, constraints)
+      const aiRanked = await aiRank(options.ai, pool, anchor, radius, stateWords, activeExcludes, analysis, constraints, options.recentPath)
       if (aiRanked.length) {
         ranked = aiRanked
         engine = 'ai'
@@ -393,11 +425,11 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
       : '候选全部被当前边界过滤掉了，可以把距离稍微打开一点。')
   }
 
-  // 5. 插入“稍后播放”队列（首批置顶）
+  // 5. 插入“稍后播放”队列（T-B2：续补模式追加队尾，不重排已计划的路径）
   addTempPlayList(ranked.map(t => ({
     listId: LIST_IDS.PLAY_LATER,
     musicInfo: t.musicInfo,
-    isTop: true,
+    isTop: options.appendMode !== 'bottom',
   })))
 
   // 6. 返回视图
@@ -407,7 +439,9 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
     position: playProgress.nowPlayTimeStr,
     featureSheet,
     analysis: { summary: analysis.summary, aiUsed, error: aiAnalysisError },
+    rawAnalysis: analysis,
     candidates: ranked.map((t: TrackLike) => ({
+      id: t.encryptedId ?? null,
       artist: t.artist ?? '',
       title: t.title ?? '',
       album: t.album ?? '',

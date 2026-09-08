@@ -157,6 +157,15 @@ const defaultSetting: LX.AppSetting = {
   'odc.isAutoClearSearchInput': false,
   'odc.isAutoClearSearchList': false,
 
+  'ai.enable': false,
+  'ai.provider': 'openai-compatible',
+  'ai.baseUrl': '',
+  'ai.apiKey': '',
+  'ai.model': '',
+
+  'recommend.radius': 35,
+  'recommend.autoRefill': true,
+
 }
 
 
