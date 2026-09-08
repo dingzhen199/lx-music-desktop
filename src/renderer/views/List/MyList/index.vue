@@ -55,6 +55,7 @@
           <transition name="list-active">
             <svg-icon v-if="item.id == listId" name="angle-right-solid" :class="$style.activeIcon" />
           </transition>
+          <span v-if="item.cover" :class="$style.listsItemCover" :style="{ backgroundImage: 'url(' + item.cover + ')' }" />
           {{ item.name }}
         </span>
         <base-input
@@ -374,6 +375,16 @@ export default {
   font-size: 13px;
   line-height: @lists-item-height;
   .mixin-ellipsis-1();
+}
+.listsItemCover {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  margin-right: 6px;
+  border-radius: 4px;
+  vertical-align: middle;
+  background-position: center;
+  background-size: cover;
 }
 .listsInput {
   width: 100%;

@@ -54,6 +54,9 @@ export const insertUserLists = (lists: LX.DBService.UserListInfo[], isClear: boo
         sourceListId: list.sourceListId,
         locationUpdateTime: list.locationUpdateTime,
         position: list.position,
+        cover: list.cover ?? null,
+        desc: list.desc ?? null,
+        author: list.author ?? null,
       })
     }
   })(lists)
@@ -85,7 +88,8 @@ export const updateUserLists = (lists: LX.DBService.UserListInfo[]) => {
   const db = getDB()
   const listUpdateStatement = createListUpdateStatement()
   db.transaction((lists: LX.DBService.UserListInfo[]) => {
-    for (const list of lists) listUpdateStatement.run(list)
+    // 兼容远程同步等场景下未携带新元数据字段的对象，避免 named parameter 缺失报错
+    for (const list of lists) listUpdateStatement.run({ ...list, cover: list.cover ?? null, desc: list.desc ?? null, author: list.author ?? null })
   })(lists)
 }
 
@@ -353,6 +357,9 @@ export const overwriteListData = (lists: LX.DBService.UserListInfo[], musicInfos
         sourceListId: list.sourceListId,
         locationUpdateTime: list.locationUpdateTime,
         position: list.position,
+        cover: list.cover ?? null,
+        desc: list.desc ?? null,
+        author: list.author ?? null,
       })
     }
     musicInfoClearStatement.run()

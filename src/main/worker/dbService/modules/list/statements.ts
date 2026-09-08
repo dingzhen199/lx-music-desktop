@@ -8,7 +8,7 @@ import { getDB } from '../../db'
 export const createListQueryStatement = () => {
   const db = getDB()
   return db.prepare<[]>(`
-    SELECT "id", "name", "source", "sourceListId", "position", "locationUpdateTime"
+    SELECT "id", "name", "source", "sourceListId", "position", "locationUpdateTime", "cover", "desc", "author"
     FROM "main"."my_list"
     `)
 }
@@ -20,8 +20,8 @@ export const createListQueryStatement = () => {
 export const createListInsertStatement = () => {
   const db = getDB()
   return db.prepare<[LX.DBService.UserListInfo]>(`
-    INSERT INTO "main"."my_list" ("id", "name", "source", "sourceListId", "position", "locationUpdateTime")
-    VALUES (@id, @name, @source, @sourceListId, @position, @locationUpdateTime)`)
+    INSERT INTO "main"."my_list" ("id", "name", "source", "sourceListId", "position", "locationUpdateTime", "cover", "desc", "author")
+    VALUES (@id, @name, @source, @sourceListId, @position, @locationUpdateTime, @cover, @desc, @author)`)
 }
 
 /**
@@ -50,7 +50,8 @@ export const createListUpdateStatement = () => {
   const db = getDB()
   return db.prepare<[LX.DBService.UserListInfo]>(`
     UPDATE "main"."my_list"
-    SET "name"=@name, "source"=@source, "sourceListId"=@sourceListId, "locationUpdateTime"=@locationUpdateTime
+    SET "name"=@name, "source"=@source, "sourceListId"=@sourceListId, "locationUpdateTime"=@locationUpdateTime,
+      "cover"=COALESCE(@cover, "cover"), "desc"=COALESCE(@desc, "desc"), "author"=COALESCE(@author, "author")
     WHERE "id"=@id`)
 }
 

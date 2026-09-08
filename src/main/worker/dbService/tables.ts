@@ -133,6 +133,9 @@ tables.set('my_list', `
     "sourceListId" TEXT,
     "position" INTEGER NOT NULL,
     "locationUpdateTime" INTEGER,
+    "cover" TEXT,
+    "desc" TEXT,
+    "author" TEXT,
     PRIMARY KEY("id")
   );
 `)
@@ -228,4 +231,4 @@ tables.set('dislike_list', `
 
 export default tables
 
-export const DB_VERSION = '2'
+export const DB_VERSION = '3'

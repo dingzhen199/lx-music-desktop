@@ -39,6 +39,9 @@ declare namespace LX {
       sourceListId?: string
       position: number
       locationUpdateTime: number | null
+      cover?: string | null
+      desc?: string | null
+      author?: string | null
     }
 
     type Lyricnfo = {

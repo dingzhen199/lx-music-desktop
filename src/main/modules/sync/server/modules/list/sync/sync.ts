@@ -322,6 +322,10 @@ const selectData = <T>(snapshot: T | null, local: T, remote: T): T => {
     // ? (snapshot == remote ? snapshot as T : remote)
     : local
 }
+// 远端未携带元数据（旧版本设备）时保留本地值，避免同步后元数据丢失
+const mergeListField = <T>(snapshot: T | null, local: T | null, remote: T | null): T | null => {
+  return remote == null ? (local ?? null) : selectData(snapshot, local, remote)
+}
 const handleMergeListDataFromSnapshot = async(socket: LX.Sync.Server.Socket, snapshot: LX.Sync.List.ListData) => {
   if (await checkListLatest(socket)) return
 
@@ -354,13 +358,16 @@ const handleMergeListDataFromSnapshot = async(socket: LX.Sync.Server.Socket, sna
     const remoteList = remoteUserListData.get(list.id)
     let newList: LX.List.UserListInfoFull
     if (remoteList) {
-      const snapshotList = snapshotUserListData.get(list.id) ?? { name: null, source: null, sourceListId: null, list: [] }
+      const snapshotList = snapshotUserListData.get(list.id) ?? { name: null, source: null, sourceListId: null, cover: null, desc: null, author: null, list: [] }
       newList = buildUserListInfoFull({
         id: list.id,
         name: selectData(snapshotList.name, list.name, remoteList.name),
         source: selectData(snapshotList.source, list.source, remoteList.source),
         sourceListId: selectData(snapshotList.sourceListId, list.sourceListId, remoteList.sourceListId),
         locationUpdateTime: list.locationUpdateTime,
+        cover: mergeListField(snapshotList.cover, list.cover, remoteList.cover),
+        desc: mergeListField(snapshotList.desc, list.desc, remoteList.desc),
+        author: mergeListField(snapshotList.author, list.author, remoteList.author),
         list: mergeListDataFromSnapshot(list.list, remoteList.list, snapshotList.list, addMusicLocationType),
       })
     } else {

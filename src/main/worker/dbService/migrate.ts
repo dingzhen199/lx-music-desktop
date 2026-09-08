@@ -35,6 +35,16 @@ const migrateV1 = (db: Database.Database) => {
   }
 }
 
+// v2.12.2 之前的 my_list 没有封面/简介/作者字段，逐列补齐；
+// 先查询已存在的列避免重复 ALTER（重复执行迁移时幂等）
+const migrateV2 = (db: Database.Database) => {
+  const existsColumns = new Set((db.prepare<[]>('PRAGMA table_info("my_list")').all() as Array<{ name: string }>).map(info => info.name))
+  for (const column of ['cover', 'desc', 'author']) {
+    if (existsColumns.has(column)) continue
+    db.exec(`ALTER TABLE "main"."my_list" ADD COLUMN "${column}" TEXT`)
+  }
+}
+
 export default (db: Database.Database) => {
   // PRAGMA user_version = x
   // console.log(db.prepare('PRAGMA user_version').get().user_version)
@@ -43,6 +53,10 @@ export default (db: Database.Database) => {
   switch (version) {
     case '1':
       migrateV1(db)
+      db.prepare('UPDATE "main"."db_info" SET "field_value"=@value WHERE "field_name"=@name').run({ name: 'version', value: '2' })
+      // falls through
+    case '2':
+      migrateV2(db)
       db.prepare('UPDATE "main"."db_info" SET "field_value"=@value WHERE "field_name"=@name').run({ name: 'version', value: DB_VERSION })
       break
   }

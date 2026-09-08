@@ -2,6 +2,7 @@ import { tempListMeta, userLists } from '@renderer/store/list/state'
 import { dialog } from '@renderer/plugins/Dialog'
 import syncSourceList from '@renderer/store/list/syncSourceList'
 import { getListDetail, getListDetailAll } from '@renderer/store/songList/action'
+import { listDetailInfo } from '@renderer/store/songList/state'
 import { createUserList, setTempList } from '@renderer/store/list/action'
 import { playList } from '@renderer/core/player/action'
 import { LIST_IDS } from '@common/constants'
@@ -26,12 +27,16 @@ export const addSongListDetail = async(id: string, source: LX.OnlineSource, name
   }
 
   const list = await getListDetailAll(id, source)
+  const info = listDetailInfo.info
   await createUserList({
-    name,
+    name: name ?? info.name,
     id: `${source}_${toMD5(listId)}`,
     list,
     source,
     sourceListId: id,
+    cover: info.img,
+    desc: info.desc,
+    author: info.author,
   })
 }
 

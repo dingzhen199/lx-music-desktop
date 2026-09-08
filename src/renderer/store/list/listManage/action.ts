@@ -42,6 +42,9 @@ const createUserList = ({
   source,
   sourceListId,
   locationUpdateTime,
+  cover,
+  desc,
+  author,
 }: LX.List.UserListInfo, position: number) => {
   if (position < 0 || position >= userLists.length) {
     userLists.push({
@@ -50,6 +53,9 @@ const createUserList = ({
       source,
       sourceListId,
       locationUpdateTime,
+      cover,
+      desc,
+      author,
     })
   } else {
     userLists.splice(position, 0, {
@@ -58,6 +64,9 @@ const createUserList = ({
       source,
       sourceListId,
       locationUpdateTime,
+      cover,
+      desc,
+      author,
     })
   }
 }
@@ -69,6 +78,9 @@ const updateList = ({
   sourceListId,
   meta,
   locationUpdateTime,
+  cover,
+  desc,
+  author,
 }: LX.List.UserListInfo & { meta?: { id?: string } }) => {
   let targetList
   switch (id) {
@@ -85,6 +97,10 @@ const updateList = ({
       targetList.source = source
       targetList.sourceListId = sourceListId
       targetList.locationUpdateTime = locationUpdateTime
+      // 与 main 侧 COALESCE 语义一致：未提供时保留原值
+      if (cover != null) targetList.cover = cover
+      if (desc != null) targetList.desc = desc
+      if (author != null) targetList.author = author
       break
   }
 }
@@ -143,13 +159,16 @@ export const listDataOverwrite = ({ defaultList, loveList, userList, tempList }:
   return updatedListIds
 }
 
-export const userListCreate = ({ name, id, source, sourceListId, position, locationUpdateTime }: {
+export const userListCreate = ({ name, id, source, sourceListId, position, locationUpdateTime, cover, desc, author }: {
   name: string
   id: string
   source?: LX.OnlineSource
   sourceListId?: string
   position: number
   locationUpdateTime: number | null
+  cover?: string | null
+  desc?: string | null
+  author?: string | null
 }) => {
   if (userLists.some(item => item.id == id)) return
   const newList: LX.List.UserListInfo = {
@@ -158,6 +177,9 @@ export const userListCreate = ({ name, id, source, sourceListId, position, locat
     source,
     sourceListId,
     locationUpdateTime,
+    cover,
+    desc,
+    author,
   }
   createUserList(newList, position)
 }
