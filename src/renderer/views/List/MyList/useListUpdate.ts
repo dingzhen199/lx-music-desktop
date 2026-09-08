@@ -15,7 +15,7 @@ export default () => {
       confirmButtonText: t('lists__remove_tip_button'),
     }).then(isSync => {
       if (!isSync) return
-      void syncSourceList(listInfo)
+      void syncSourceList(listInfo).catch(() => {})
     })
   }
 

@@ -10,10 +10,11 @@
             <h3 :class="$style.text">{{ list.name }} <span :class="$style.label">{{ list.source }}</span></h3>
             <div>
               <base-checkbox
-                :id="`list_auto_update_${list.id}`" :model-value="updateInfo[list.id]?.isAutoUpdate == true"
+                :id="`list_auto_update_${list.id}`" :model-value="updateInfo[list.id]?.isAutoUpdate !== false"
                 :class="$style.checkbox" :label="$t('list_update_modal__auto_update')" @change="handleChangeAutoUpdate(list, $event)"
               />
               <span :class="$style.label" style="vertical-align: text-top;">{{ listUpdateTimes[list.id] }}</span>
+              <span v-if="updateInfo[list.id]?.updateError" :class="$style.error">{{ $t('list_update_modal__update_error') }}</span>
             </div>
           </div>
           <div :class="$style.btns">
@@ -36,7 +37,7 @@
 </template>
 
 <script>
-import { computed, ref } from '@common/utils/vueTools'
+import { computed, ref, watch } from '@common/utils/vueTools'
 import { userLists, fetchingListStatus, listUpdateTimes } from '@renderer/store/list/state'
 import handleSyncSourceList from '@renderer/store/list/syncSourceList'
 import musicSdk from '@renderer/utils/musicSdk'
@@ -56,23 +57,21 @@ export default {
     const updateInfo = ref({})
     // const updateTimes = ref({})
 
-    void getListUpdateInfo().then((listUpdateInfo) => {
-      updateInfo.value = listUpdateInfo
-      // if (listUpdateTimes._inited) {
-      //   for (const [id, value] of Object.entries(info)) {
-      //     autoUpdate[id] = value.isAutoUpdate == true
-      //   }
-      // } else {
-      //   for (const [id, value] of Object.entries(info)) {
-      //     autoUpdate[id] = value.isAutoUpdate == true
-      //     listUpdateTimes[id] = value.updateTime ? dateFormat(value.updateTime) : ''
-      //   }
-      // }
-      // listUpdateTimes._inited = true
+    const loadUpdateInfo = async() => {
+      updateInfo.value = await getListUpdateInfo()
+    }
+    void loadUpdateInfo()
+    // 打开弹窗时重新读取，展示最新的更新状态（如启动自动更新产生的失败标记）
+    watch(() => props.visible, visible => {
+      if (visible) void loadUpdateInfo()
     })
 
     const handleUpdate = (targetListInfo) => {
       void handleSyncSourceList(targetListInfo)
+        .catch(() => {})
+        .finally(() => {
+          void loadUpdateInfo()
+        })
       // console.log(targetListInfo.list.length, list.length)
     }
 
@@ -168,6 +167,12 @@ export default {
   // align-items: center;
   // transform: rotate(45deg);
   // background-color:
+}
+.error {
+  flex: none;
+  font-size: 12px;
+  color: var(--color-btn-close);
+  padding: 0 10px;
 }
 .btns {
   flex: none;

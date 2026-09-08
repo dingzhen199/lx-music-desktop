@@ -122,6 +122,14 @@ export const setListUpdateTime = async(id: string, time: number) => {
   listUpdateInfo[id] = targetInfo
   saveListUpdateInfo()
 }
+export const setListUpdateError = async(id: string, error: string | null) => {
+  await initListUpdateInfo()
+  const targetInfo = listUpdateInfo[id] ?? { updateTime: 0, isAutoUpdate: false }
+  targetInfo.updateError = error
+  targetInfo.updateErrorAt = error == null ? null : Date.now()
+  listUpdateInfo[id] = targetInfo
+  saveListUpdateInfo()
+}
 // export const setListUpdateInfo = (id, { updateTime, isAutoUpdate }) => {
 //   listUpdateInfo[id] = { updateTime, isAutoUpdate }
 //   saveListUpdateInfo()

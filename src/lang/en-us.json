@@ -142,6 +142,7 @@
   "list_update_modal__tips": "💡 The list with \"Auto Update\" checked will be automatically updated each time the app is started.",
   "list_update_modal__title": "List Update Management",
   "list_update_modal__update": "Sync",
+  "list_update_modal__update_error": "Update failed, local data kept",
   "lists__add_local_file_desc": "Choose song file",
   "lists__dislike_music_singer_tip": "Do you really dislike {singer}'s \"{name}\"?",
   "lists__dislike_music_tip": "Do you really dislike \"{name}\"?",
