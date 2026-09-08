@@ -13,6 +13,8 @@ const getListId = (id: string, source: LX.OnlineSource) => `${source}__${id}`
 export const addSongListDetail = async(id: string, source: LX.OnlineSource, name?: string) => {
   // console.log(this.listDetail.info)
   // if (!this.listDetail.info.name) return
+  // 在 await 之前快照详情页元数据，避免等待期间详情页被切换导致读到其它歌单的封面/简介/作者
+  const info = { ...listDetailInfo.info }
   const listId = getListId(id, source)
   const targetList = userLists.find(l => l.sourceListId == listId)
   if (targetList) {
@@ -27,7 +29,6 @@ export const addSongListDetail = async(id: string, source: LX.OnlineSource, name
   }
 
   const list = await getListDetailAll(id, source)
-  const info = listDetailInfo.info
   await createUserList({
     name: name ?? info.name,
     id: `${source}_${toMD5(listId)}`,

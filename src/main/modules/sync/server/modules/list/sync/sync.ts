@@ -322,9 +322,9 @@ const selectData = <T>(snapshot: T | null, local: T, remote: T): T => {
     // ? (snapshot == remote ? snapshot as T : remote)
     : local
 }
-// 远端未携带元数据（旧版本设备）时保留本地值，避免同步后元数据丢失
+// 远端未携带元数据（旧版本设备）或为空字符串（无封面/简介/作者）时保留本地值，避免同步后元数据丢失
 const mergeListField = <T>(snapshot: T | null, local: T | null, remote: T | null): T | null => {
-  return remote == null ? (local ?? null) : selectData(snapshot, local, remote)
+  return remote == null || remote == '' ? (local ?? null) : selectData(snapshot, local, remote)
 }
 const handleMergeListDataFromSnapshot = async(socket: LX.Sync.Server.Socket, snapshot: LX.Sync.List.ListData) => {
   if (await checkListLatest(socket)) return
