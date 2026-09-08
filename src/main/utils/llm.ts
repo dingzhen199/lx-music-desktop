@@ -7,29 +7,28 @@
  * - 非 2xx 抛出 `${status} ${响应片段}` 错误。
  * API Key 仅随 IPC 参数运行时传入，不落盘、不打日志。
  */
-import type { RecommendLlmMessage, RecommendLlmParams, RecommendLlmResult } from '@common/recommendation'
+import type { RecommendLlmMessage, RecommendLlmParams, RecommendLlmProtocol, RecommendLlmResult } from '@common/recommendation'
 import { httpFetch } from './request'
 
 /** 单次 LLM 调用超时（毫秒）。 */
 const LLM_TIMEOUT = 60_000
 
 /** 协议默认服务地址。 */
-const DEFAULT_BASE_URLS = {
+const DEFAULT_BASE_URLS: Record<RecommendLlmProtocol, string> = {
   'openai-compatible': 'https://api.openai.com/v1',
   anthropic: 'https://api.anthropic.com/v1',
-} as const
+}
 
-type LlmProtocol = keyof typeof DEFAULT_BASE_URLS
+type LlmProtocol = RecommendLlmProtocol
 
 const normalizeBaseUrl = (baseUrl?: string): string => {
   return String(baseUrl ?? '').trim().replace(/\/+$/, '')
 }
 
 /** 协议判定：显式 protocol 优先，否则按 baseUrl 域名隐式判定，默认 OpenAI-compatible。 */
-const resolveProtocol = (protocol: string | undefined, baseUrl: string): LlmProtocol => {
-  const value = String(protocol ?? '').toLowerCase()
-  if (value === 'anthropic') return 'anthropic'
-  if (value === 'openai' || value === 'openai-compatible') return 'openai-compatible'
+const resolveProtocol = (protocol: RecommendLlmProtocol | undefined, baseUrl: string): LlmProtocol => {
+  if (protocol === 'anthropic') return 'anthropic'
+  if (protocol === 'openai-compatible') return 'openai-compatible'
   return /anthropic\.com/i.test(baseUrl) ? 'anthropic' : 'openai-compatible'
 }
 

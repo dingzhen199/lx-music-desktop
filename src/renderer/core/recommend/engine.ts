@@ -7,6 +7,7 @@
  */
 
 import { LIST_IDS } from '@common/constants'
+import type { RecommendLlmProtocol } from '@common/recommendation'
 import { addTempPlayList } from '@renderer/store/player/action'
 import { playProgress } from '@renderer/store/player/playProgress'
 import { playMusicInfo } from '@renderer/store/player/state'
@@ -43,7 +44,7 @@ import type { RecallAnchor, RecallCandidate } from './recall'
 
 /** AI 配置（仅运行时传入，不落盘）。 */
 export interface AiConfig {
-  protocol?: string
+  protocol?: RecommendLlmProtocol
   baseUrl?: string
   apiKey: string
   model: string
@@ -358,8 +359,6 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
 
   // 3. 跨源召回（语义关键词 + 同艺人 + 本地我喜欢/收藏歌单）
   const recall = await recallCandidates(recallAnchor, analysis, radius, {
-    stateWords,
-    excludes: activeExcludes,
     excludedLanguages: constraints.excludedLanguages,
   })
   const pool = recall.items
@@ -427,9 +426,9 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
 
 // ============================ dev 调试入口 ============================
 
-/** 暴露 console 调试入口（无正式 UI；API Key 只接受运行时通过 explore 的 options.ai 传入）。 */
+/** 暴露 console 调试入口（仅非生产环境；无正式 UI；API Key 只接受运行时通过 explore 的 options.ai 传入）。 */
 export const registerDevHook = (): void => {
-  if (typeof window === 'undefined') return
+  if (typeof window === 'undefined' || window.lx?.isProd) return
   ;(window as unknown as Record<string, unknown>).__lxRecommend = {
     explore: exploreOnce,
     startCollect: startFeatureCollection,
@@ -438,4 +437,6 @@ export const registerDevHook = (): void => {
   }
 }
 
-registerDevHook()
+// 与仓库既有判定一致（globalData.ts：isProd = process.env.NODE_ENV == 'production'）；
+// T-B2 的 UI 将直接 import 本模块的 exploreOnce 等导出，不受该门控影响。
+if (typeof window !== 'undefined' && !window.lx?.isProd) registerDevHook()

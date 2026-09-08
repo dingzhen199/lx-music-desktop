@@ -6,6 +6,7 @@ import './core/globalData'
 import '@renderer/event'
 
 // 推荐引擎 dev 调试入口（T-B1）：window.__lxRecommend = { explore, startCollect, stopCollect, clearSession }
+// 仅非生产环境挂载（判定在 engine.ts，与仓库 isProd 约定一致）；T-B2 直接 import 本模块的导出，不受门控影响
 import '@renderer/core/recommend/engine'
 
 // Components

@@ -272,15 +272,20 @@ export class AudioFeatureCollector {
     if (!this.started || !this.sampling) return
     const now = Date.now()
     if (now - this.lastPullAt < BUCKET_INTERVAL_MS) return
+    this.lastPullAt = now
+    this.sampleNow()
+  }
+
+  /** 采样一次并滚动入桶（pull / sampleOnce 共用；analyser 不可用时静默跳过）。 */
+  private sampleNow(): void {
     const analyser = this.safeAnalyser()
     if (!analyser) return
-    this.lastPullAt = now
     const timeData = new Float32Array(analyser.fftSize)
     const freqData = new Float32Array(analyser.frequencyBinCount)
     analyser.getFloatTimeDomainData(timeData)
     analyser.getFloatFrequencyData(freqData)
     const prev = this.buckets.length ? this.buckets[this.buckets.length - 1].rms : null
-    const bucket = buildBucket(now, timeData, freqData, prev)
+    const bucket = buildBucket(Date.now(), timeData, freqData, prev)
     this.buckets.push(bucket)
     if (this.buckets.length > MAX_BUCKETS) this.buckets.splice(0, this.buckets.length - MAX_BUCKETS)
   }
@@ -307,17 +312,7 @@ export class AudioFeatureCollector {
       }
     }
     this.lastPullAt = Date.now()
-    const analyser = this.safeAnalyser()
-    if (analyser) {
-      const timeData = new Float32Array(analyser.fftSize)
-      const freqData = new Float32Array(analyser.frequencyBinCount)
-      analyser.getFloatTimeDomainData(timeData)
-      analyser.getFloatFrequencyData(freqData)
-      const prev = this.buckets.length ? this.buckets[this.buckets.length - 1].rms : null
-      const bucket = buildBucket(this.lastPullAt, timeData, freqData, prev)
-      this.buckets.push(bucket)
-      if (this.buckets.length > MAX_BUCKETS) this.buckets.splice(0, this.buckets.length - MAX_BUCKETS)
-    }
+    this.sampleNow()
     return this.summary()
   }
 }

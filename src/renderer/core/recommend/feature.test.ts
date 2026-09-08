@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { bandEnergies, buildBucket, computeRms, MAX_BUCKETS, summarizeBuckets } from './feature'
+import { bandEnergies, buildBucket, computeRms, summarizeBuckets } from './feature'
 import type { AudioBucket } from './feature'
 
 // makeTimeData: 生成时域采样（常数振幅 → RMS 等于常数值）
@@ -175,11 +175,11 @@ describe('summarizeBuckets - 桶摘要（人读特征事实单）', () => {
     expect(sheet.text).toContain('样本较短')
   })
 
-  it('超过 MAX_BUCKETS 的输入按滚动窗口截断为最近 N=90 桶', () => {
+  it('不截断输入：summarizeBuckets 按传入桶数统计（滚动窗口截断属于采集器集成逻辑，另见 pull/sampleNow）', () => {
     // act
-    const sheet = summarizeBuckets(makeBuckets(150, i => 0.1 + (i % 10) * 0.01).slice(-MAX_BUCKETS))
+    const sheet = summarizeBuckets(makeBuckets(150, i => 0.1 + (i % 10) * 0.01))
     // assert
-    expect(sheet.bucketCount).toBe(90)
-    expect(sheet.durationSec).toBe(90)
+    expect(sheet.bucketCount).toBe(150)
+    expect(sheet.durationSec).toBe(150)
   })
 })

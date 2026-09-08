@@ -13,6 +13,7 @@ import { loveList, userLists } from '@renderer/store/list/listManage/state'
 import { playedList } from '@renderer/store/player/state'
 import { toNewMusicInfo } from '@renderer/utils'
 import musicSdk from '@renderer/utils/musicSdk'
+import { recallSourceLanguageBlocked, SEMANTIC_DISTANCE_BASE, SEMANTIC_DISTANCE_STEP, trimSemanticQueries } from './gates'
 import { sameArtistConflictsWithConstraints } from './judgment'
 import type { AnalysisShape, LanguageConstraints, TrackLike } from './judgment'
 import { recallQueries } from './prompts'
@@ -43,10 +44,6 @@ export interface RecallAnchor {
 
 /** 召回选项。 */
 export interface RecallOptions {
-  /** 会话指令原文（供排除词与约束解析）。 */
-  stateWords?: string
-  /** 显式排除词。 */
-  excludes?: string
   /** 语言硬约束（“不要华语”等，已解析）。 */
   excludedLanguages?: string[]
 }
@@ -92,9 +89,9 @@ export function buildRecallQueries(
   return queries
 }
 
-/** 感知距离：与 from-here tracksFrom 一致（语义按查询序号递增，同艺人最近）。 */
-const distanceFor = (kind: RecallQuery['kind'], queryIndex: number): number => {
-  return kind === 'same-artist' ? 8 : Math.min(80, 24 + queryIndex * 7)
+/** 感知距离：与 from-here tracksFrom 一致（语义按语义查询序号递增，同艺人最近）。 */
+const distanceFor = (kind: RecallQuery['kind'], semanticIndex: number): number => {
+  return kind === 'same-artist' ? 8 : SEMANTIC_DISTANCE_BASE + semanticIndex * SEMANTIC_DISTANCE_STEP
 }
 
 /** 与 anchor 是同一首歌（id 相同，或艺人+歌名一致）。 */
@@ -134,7 +131,7 @@ const toCandidate = (info: LX.Music.MusicInfo, source: string, extra: {
 /** 单条关键词的跨源搜索（每关键词每源限 10 首）。 */
 const searchByQuery = async(
   q: RecallQuery,
-  queryIndex: number,
+  semanticIndex: number,
   loveIds: Set<string>,
   recentIds: Set<string>,
 ): Promise<RecallCandidate[]> => {
@@ -146,7 +143,7 @@ const searchByQuery = async(
     console.error('[recall] 搜索失败', q.keyword, err)
     return out
   }
-  const distance = distanceFor(q.kind, queryIndex)
+  const distance = distanceFor(q.kind, semanticIndex)
   const source = q.kind === 'same-artist' ? 'same-artist' : 'semantic-search'
   const reason = q.kind === 'same-artist' ? '保留起点熟悉的声音与表达方式' : '沿着起点的声音气质继续展开'
   for (const result of results ?? []) {
@@ -188,6 +185,8 @@ export const recallCandidates = async(
   const constraints: LanguageConstraints = { excludedLanguages: options.excludedLanguages ?? [] }
 
   // 本地池：我喜欢列表 + 用户收藏歌单（无 id 歌曲不会出现，均为可播放曲目）
+  // 各来源截断上限：离线池仅作弱偏好 tie-break，超量只会带来排序噪音与带宽浪费。
+  const LOCAL_POOL_CAP = 200
   const loveIds = new Set<string>()
   const recentIds = new Set<string>()
   for (const item of playedList.slice(-10)) {
@@ -196,7 +195,7 @@ export const recallCandidates = async(
   let likedItems: LX.Music.MusicInfo[] = []
   const playlistItems: LX.Music.MusicInfo[] = []
   try {
-    likedItems = await getListMusics(loveList.id)
+    likedItems = (await getListMusics(loveList.id)).slice(0, LOCAL_POOL_CAP)
     for (const m of likedItems) loveIds.add(m.id)
   } catch (err) {
     errors.push(`liked: ${(err as Error).message}`)
@@ -204,7 +203,10 @@ export const recallCandidates = async(
   for (const list of userLists) {
     try {
       if (!list.id) continue
-      playlistItems.push(...(await getListMusics(list.id)))
+      for (const musicInfo of await getListMusics(list.id)) {
+        if (playlistItems.length >= LOCAL_POOL_CAP) break
+        playlistItems.push(musicInfo)
+      }
     } catch (err) {
       errors.push(`playlist:${list.id}: ${(err as Error).message}`)
     }
@@ -218,10 +220,13 @@ export const recallCandidates = async(
     analysis as AnalysisShape,
     constraints,
   )
-  const queries = buildRecallQueries(anchor, analysis, radius, { sameArtistAllowed })
+  // 语义查询距程裁剪（S3）：距离 24+7*i 超过半径的语义查询不再发起，同艺人查询保留。
+  const queries = trimSemanticQueries(buildRecallQueries(anchor, analysis, radius, { sameArtistAllowed }), radius)
 
   // 并行执行所有查询（同艺人 + 语义），单条失败不影响整体。
-  const searchResults = await Promise.all(queries.map(async(q, index) => {
+  let semanticIndex = 0
+  const searchResults = await Promise.all(queries.map(async(q) => {
+    const index = q.kind === 'semantic' ? semanticIndex++ : 0
     return searchByQuery(q, index, loveIds, recentIds).catch(err => {
       errors.push(`${q.kind}:${q.keyword}: ${(err as Error).message}`)
       return []
@@ -234,6 +239,8 @@ export const recallCandidates = async(
     const key = String(c.encryptedId ?? `${c.artist}::${c.title}`)
     if (seen.has(key)) return
     if (sameTrack(c, anchor)) return
+    // 源头语言门控（S1）：排除语言时仅拦高置信元数据提示的候选（rank 阶段守门仍保留为兜底）。
+    if (recallSourceLanguageBlocked(c, constraints)) return
     seen.add(key)
     items.push(c)
   }
