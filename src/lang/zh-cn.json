@@ -88,6 +88,7 @@
   "explore__instruction_tip": "如：更冷一点、不要华语、想听纯音乐",
   "explore__path": "探索路径",
   "explore__path_empty": "路径还是空的，正在计划中…",
+  "explore__plan_failed": "这次计划没有完成",
   "explore__remaining": "队列剩余 {count} 首",
   "explore__end": "结束会话",
   "explore__refilling": "正在计划下一段…",

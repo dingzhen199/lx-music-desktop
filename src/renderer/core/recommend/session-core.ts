@@ -163,11 +163,13 @@ export const computeRefillNeed = (outstandingRecommendedIds: string[], minQueueS
 /**
  * 反馈拼接成一句续补指令（positive 在前、negative 在后）；
  * 无反馈返回空串。由调用方与用户约束拼接后传给 exploreOnce 的 instruction。
+ * negative 用「不要 + 空格」而非全角冒号：judgment.negativeFromInstruction 的
+ * 捕获组不排除全角冒号，冒号会粘进第一个艺人的词元导致排除失效。
  */
 export const buildReplanInstruction = (state: SessionState): string => {
   const parts = [
     state.positiveArtists.length ? `近一点的方向：${state.positiveArtists.join('、')}` : '',
-    state.negativeArtists.length ? `不要：${state.negativeArtists.join('、')}` : '',
+    state.negativeArtists.length ? `不要 ${state.negativeArtists.join('、')}` : '',
   ].filter(Boolean)
   return parts.join('；')
 }

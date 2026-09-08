@@ -47,7 +47,7 @@
         <div :class="$style.status">
           <span v-if="refillState === 'refilling'">{{ t('explore__refilling') }}</span>
           <span v-else-if="refillState === 'retrying'">{{ t('explore__retrying') }}</span>
-          <span v-else-if="lastErrorText">{{ t('explore__refill_failed') }}</span>
+          <span v-else-if="lastErrorText">{{ lastErrorKind === 'refill' ? t('explore__refill_failed') : t('explore__plan_failed') }}</span>
           <span v-else-if="lastResultEngine">{{ lastResultEngine === 'ai' ? t('explore__engine_ai') : t('explore__engine_local') }}</span>
         </div>
 
@@ -85,6 +85,7 @@ import { playMusicInfo } from '@renderer/store/player/state'
 import {
   applyFeedback,
   endSession,
+  lastErrorKind,
   lastErrorText,
   lastResultEngine,
   refillState,

@@ -88,6 +88,7 @@
   "explore__instruction_tip": "e.g. darker, no Chinese vocals, instrumental only",
   "explore__path": "The path",
   "explore__path_empty": "The path is still empty, planning…",
+  "explore__plan_failed": "The plan wasn't completed",
   "explore__remaining": "{count} left in queue",
   "explore__end": "End session",
   "explore__refilling": "Planning the next round…",

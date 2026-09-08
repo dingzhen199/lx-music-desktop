@@ -10,6 +10,7 @@
 import { computed, ref } from '@common/utils/vueTools'
 import { appSetting } from '@renderer/store/setting'
 import { playMusicInfo, tempPlayList } from '@renderer/store/player/state'
+import { removeTempPlayList } from '@renderer/store/player/action'
 import { exploreOnce } from './engine'
 import type { AiConfig, ExploreAnchor, ExploreOptions, ExploreResult } from './engine'
 import type { RankPathInput, TrackAnalysis } from './prompts'
@@ -38,6 +39,8 @@ const REFILL_MAX_RETRY = 3
 const state = ref<SessionState | null>(null)
 const lastResult = ref<ExploreResult | null>(null)
 const lastError = ref<string | null>(null)
+/** 最近一次失败的类型（初始计划 / 续补），供页面区分文案。 */
+const lastErrorKind = ref<'initial' | 'refill' | null>(null)
 /** 续补状态：idle / refilling / retrying。 */
 const refillState = ref<'idle' | 'refilling' | 'retrying'>('idle')
 
@@ -48,6 +51,8 @@ let retryTimer: ReturnType<typeof setTimeout> | null = null
 // 单飞标记放在对象属性上（eslint require-atomic-updates 配置 allowProperties: true）
 const refillFlight = { inFlight: false }
 let refillRetry = 0
+// 会话代际号：end/start 时自增，在途计划完成后据此识别“已不属于当前会话”并回滚
+let epoch = 0
 
 /** 当前播放歌曲（含下载列表项兼容），用于锚点/切歌判定。 */
 const currentMusic = (): { id: string, singer: string, name: string, album: string, pic?: string | null } | null => {
@@ -170,6 +175,19 @@ const applyResult = (result: ExploreResult): void => {
   state.value = next
   lastResult.value = result
   lastError.value = null
+  lastErrorKind.value = null
+  // 起点分析只为当前会话跑一次（LLM 分析贵且非确定），续补通过 reuseAnalysis 沿用，
+  // 保证续补与首计划解读同一首歌；状态更新后再缓存，失败路径不会留下半成品分析。
+  analysisCache = result.rawAnalysis
+}
+
+/** 回滚已入队的候选：按返回 id 从队列末尾向前删除（索引随删除变化，从后往前安全）。 */
+const rollbackQueued = (result: ExploreResult): void => {
+  const ids = new Set(result.candidates.map(c => c.id).filter((id): id is string => id != null))
+  for (let i = tempPlayList.length - 1; i >= 0; i--) {
+    const id = tempPlayList[i]?.musicInfo?.id
+    if (id && ids.has(id)) removeTempPlayList(i)
+  }
 }
 
 /** 执行一次计划（单飞：in-flight 时直接返回；失败按退避重试，最多 REFILL_MAX_RETRY 次）。 */
@@ -177,17 +195,26 @@ const plan = async(mode: 'initial' | 'refill'): Promise<void> => {
   if (refillFlight.inFlight || !state.value) return
   refillFlight.inFlight = true
   refillState.value = 'refilling'
+  // 捕获发起时的代际：await 期间会话可能被结束/重启，结果只属于发起时的会话
+  const e = epoch
   try {
     const options = buildExploreOptions(mode)
     if (!options) return
     const result = await exploreOnce(options)
+    if (e !== epoch) {
+      // 会话已结束或已重启：回滚本次入队结果，不写任何会话状态
+      rollbackQueued(result)
+      return
+    }
     applyResult(result)
     refillRetry = 0
     refillState.value = 'idle'
   } catch (err) {
+    if (e !== epoch) return
     const message = (err as Error).message
     console.warn('[session] 计划失败', message)
     lastError.value = message
+    lastErrorKind.value = mode
     if (mode === 'refill' && refillRetry < REFILL_MAX_RETRY) {
       refillRetry++
       refillState.value = 'retrying'
@@ -199,7 +226,8 @@ const plan = async(mode: 'initial' | 'refill'): Promise<void> => {
       refillState.value = 'idle'
     }
   } finally {
-    refillFlight.inFlight = false
+    // 只有本代际的计划才有权释放单飞标记（旧代际的 finally 不得影响新会话）
+    if (e === epoch) refillFlight.inFlight = false
   }
 }
 
@@ -258,8 +286,10 @@ export const startSession = async(): Promise<void> => {
   if (state.value) return
   lastError.value = null
   lastResult.value = null
+  lastErrorKind.value = null
   analysisCache = null
   refillRetry = 0
+  epoch++
   const anchor: SessionAnchor = {
     id: play.id,
     artist: play.singer || '(未知艺人)',
@@ -311,6 +341,8 @@ export const endSession = (): void => {
   }
   unsubMusicToggled?.()
   unsubMusicToggled = null
+  // 代际自增：使在途计划完成时识别为旧会话并回滚，不污染新会话
+  epoch++
   state.value = null
   lastResult.value = null
   refillState.value = 'idle'
@@ -319,4 +351,4 @@ export const endSession = (): void => {
   analysisCache = null
 }
 
-export { refillState }
+export { lastErrorKind, refillState }

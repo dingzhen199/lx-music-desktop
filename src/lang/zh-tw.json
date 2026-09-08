@@ -88,6 +88,7 @@
   "explore__instruction_tip": "如：更冷一點、不要華語、想聽純音樂",
   "explore__path": "探索路徑",
   "explore__path_empty": "路徑還是空的，正在計劃中…",
+  "explore__plan_failed": "這次計畫沒有完成",
   "explore__remaining": "佇列剩餘 {count} 首",
   "explore__end": "結束會話",
   "explore__refilling": "正在計劃下一段…",

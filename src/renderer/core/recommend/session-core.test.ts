@@ -5,6 +5,7 @@
  * 会话编排（session.ts，依赖播放器/事件/引擎）不在本文件测试范围，见 T-B2 报告。
  */
 import { describe, expect, it } from 'vitest'
+import { negativeFromInstruction } from './judgment'
 import {
   RADIUS_DEFAULT,
   RADIUS_MAX,
@@ -230,7 +231,7 @@ describe('appendToPath - 路径追加顺序', () => {
 })
 
 describe('buildReplanInstruction - 反馈拼接一句话', () => {
-  it('positive 与 negative 都拼进续补指令', () => {
+  it('positive 与 negative 都拼进续补指令（空格分隔，避免 negativeFromInstruction 粘词）', () => {
     // arrange
     let state = create()
     state = applyFeedback(state, 'good', 'Adele')
@@ -238,9 +239,19 @@ describe('buildReplanInstruction - 反馈拼接一句话', () => {
     // act
     const instruction = buildReplanInstruction(state)
     // assert
-    expect(instruction).toContain('Adele')
-    expect(instruction).toContain('陈奕迅')
-    expect(instruction.indexOf('Adele')).toBeLessThan(instruction.indexOf('陈奕迅'))
+    expect(instruction).toBe('近一点的方向：Adele；不要 陈奕迅')
+  })
+
+  it('negative 分词可被 negativeFromInstruction 正确提取（T-B0 兼容）', () => {
+    // arrange
+    let state = create()
+    state = applyFeedback(state, 'far', 'Adele')
+    state = applyFeedback(state, 'far', '陈奕迅')
+    // act
+    const tokens = negativeFromInstruction(`${buildReplanInstruction(state)}；更冷一点`)
+    // assert（T-B0 按 [、/\s]+ 切词：空格分隔的复合名会被拆成多个词元，此处用单一词元艺人）
+    expect(tokens.split(' ')).toEqual(['Adele', '陈奕迅'])
+    expect(tokens).not.toContain('：')
   })
 
   it('无反馈时返回空串', () => {
