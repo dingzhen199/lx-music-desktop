@@ -61,6 +61,7 @@ export default {
       toggleDesktopLyric,
       toggleLockDesktopLyric,
       addMusicTo,
+      musicInfo,
       playMusicInfo,
       handleStartExplore,
     }
