@@ -77,7 +77,8 @@ const handleSubmit = () => {
     path: '/songList/detail',
     query: {
       source: source.value,
-      id: parsed?.id ?? text.value,
+      // 含 ###token 的输入保持原文提交（网易“我喜欢”歌单流程），由 SDK 拆分解析并保留 token
+      id: parsed && !text.value.includes('###') ? parsed.id : text.value,
       refresh: 'true',
     },
   })
