@@ -5,6 +5,9 @@ import './core/globalData'
 
 import '@renderer/event'
 
+// 推荐引擎 dev 调试入口（T-B1）：window.__lxRecommend = { explore, startCollect, stopCollect, clearSession }
+import '@renderer/core/recommend/engine'
+
 // Components
 import mountComponents from './components'
 
