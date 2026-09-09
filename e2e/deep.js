@@ -210,21 +210,27 @@ const readPathRows = async(window) => {
   if (await instructionInput.isVisible().catch(() => false)) {
     await instructionInput.fill('不要华语')
     const sendBtn = window.getByRole('button', { name: '发送' }).first()
-    await sendBtn.click().catch(() => false)
+    const sendVisible = await sendBtn.isVisible().catch(() => false)
+    const sendClicked = sendVisible ? await sendBtn.click().then(() => true).catch(() => false) : false
     await window.waitForTimeout(2500)
     const body = await window.evaluate(() => document.body.innerText)
-    record('D5-一句话约束生效无崩溃', !/这次计划没有完成/.test(body), '')
+    record('D5-一句话约束生效无崩溃',
+      !/这次计划没有完成/.test(body) && sendVisible && sendClicked,
+      `按钮可见=${sendVisible} 点击成功=${sendClicked}`)
   } else {
     record('D5-一句话约束生效无崩溃', false, '输入框不可见')
   }
 
-  // 离开再返回，会话保持
+  // 离开再返回，会话保持（C-1：返回后指令输入框草稿应同步为会话当前约束读值，
+  // 若挂载未初始化则会显示空值，此处以 D5 已发送的“不要华语”为准）
   const beforeLeave = await window.evaluate(() => document.querySelectorAll('[class*=pathItem]').length || document.body.innerText.length)
   await nav(window, '#/search')
   await nav(window, '#/explore')
   await window.getByText('你在这里').first().waitFor({ timeout: 10000 }).catch(() => {})
   const afterBack = await window.evaluate(() => document.body.innerText)
-  record('D6-离开返回会话保持', /你在这里/.test(afterBack) && /队列剩余/.test(afterBack), '')
+  const instructionValue = await window.getByPlaceholder('如：更冷一点、不要华语、想听纯音乐').first().inputValue().catch(() => '')
+  record('D6-离开返回会话保持', /你在这里/.test(afterBack) && /队列剩余/.test(afterBack) && instructionValue === '不要华语',
+    `instruction=inputValue=${instructionValue}`)
 
   // 播放栏按钮再做一次（此时当前歌已因 D3b 切换到推荐曲目：锚点不同 → 新语义是重开会话；
   // 断言页面仍正常展示会话即可，重开细节由 D7b 覆盖）

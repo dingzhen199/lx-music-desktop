@@ -118,7 +118,7 @@ watch(() => sessionView.value.active, (active) => {
   anchorPicError.value = false
   // 会话（重）开始时草稿复位为会话当前约束（初始空串/重开）
   instructionDraft.value = sessionView.value.instruction
-})
+}, { immediate: true })
 
 // 约束被提交（setInstruction）后草稿与会话约束同步；打字过程中不被打断（其他视图更新不动草稿）
 watch(() => sessionView.value.instruction, (instruction) => {
@@ -152,16 +152,22 @@ const buildBatchHeader = (batch: PathViewItem['batch'], index: number): string =
 
 /**
  * 路径分批：按计划批次连续分桶（连续相同条件并成一组）；
- * 无 batch 的历史条目归入上一组（没有上一组则自成默认组）。
+ * 无 batch 的历史条目归入其出现的“上一组”（跟随上一组头展示）；
+ * 仅当全部条目都无 batch（整条路径都无批次）时才显示 '—' 默认组头——
+ * 因此挂在路径头部、没有“上一组”可归的无 batch 条目会预并入第一个批次组。
  * 组头是额外元素，组内行结构（pathItem 及角色徽章父子关系）不变，不影响路径点击探针。
  */
 const pathBatches = computed(() => {
   const groups: Array<{ key: string, header: string, items: PathViewItem[] }> = []
+  // 整条路径存在批次条目时禁止出现 '—' 默认组头：头部无上一组可归的无 batch 条目暂存后并入首个批次组
+  const anyBatch = pathItems.value.some(item => item.batch != null)
+  const leadingOrphans: PathViewItem[] = []
   let lastKey: string | null = null
   for (const item of pathItems.value) {
     const key = batchKeyOf(item)
     if (key == null) {
       if (groups.length) groups[groups.length - 1].items.push(item)
+      else if (anyBatch) leadingOrphans.push(item)
       else groups.push({ key: '', header: '', items: [item] })
       continue
     }
@@ -171,10 +177,15 @@ const pathBatches = computed(() => {
     }
     groups[groups.length - 1].items.push(item)
   }
+  if (leadingOrphans.length && groups.length) {
+    groups[0].items = [...leadingOrphans, ...groups[0].items]
+  }
   return groups.map((group, gi) => ({
     ...group,
     key: `${gi}-${group.key}`,
-    header: buildBatchHeader(group.items[0]?.batch, gi + 1),
+    // 组头取组内第一个有 batch 的条目（前插的孤儿无 batch，不能作组头依据）；
+    // 全组无 batch 时才回退 '—' 兜底。
+    header: buildBatchHeader(group.items.find(item => item.batch != null)?.batch, gi + 1),
   }))
 })
 

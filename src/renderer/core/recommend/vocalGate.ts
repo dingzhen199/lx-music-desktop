@@ -7,19 +7,40 @@
  * 语义判定不可靠，故在此补充确定性反向过滤。
  * 本模块不依赖 judgment/prompts 的运行时逻辑（判定自实现），由 vitest 直接测试；
  * judgment.ts / gates.ts / prompts.ts 保持只读。
+ *
+ * 跨模块正则漂移说明：judgment.ts 中存在表面相似的器乐判定
+ * （likelyDerivative ~370 / vocalMismatch ~394 / coarseWorldBreak ~404），
+ * 但语义刻意不同——judgment 面向“衍生态/人声失配压制”，本门面向
+ * “用户显式要求器乐 → 反向过滤人声候选”。修改任何一侧时请勿假定另一侧会同步，
+ * 两侧词表/前缀规则各自独立演进。
  */
 
 /** 器乐信号在候选元数据中的匹配（title/artist/album/tags 联合文本小写）。 */
-const INSTRUMENTAL_META_RE = /(instrumental|纯音乐|伴奏|无人声|无歌词|纯乐器|轻音乐|pure music|纯音乐版|inst\.)/i
+const INSTRUMENTAL_META_RE = /(instrumental|纯音乐|伴奏|无人声|无歌词|纯乐器|轻音乐|pure music|inst\.)/i
 
-/** 器乐目标词（语义判定用，“器乐”覆盖“纯器乐”）。 */
-const INSTRUMENTAL_TERMS = '(?:纯音乐|器乐|instrumental|无人声|无歌词|纯乐器)'
+/**
+ * 器乐/无人声目标词：正面与负面**共用**同一常量，杜绝单边漏词漂移
+ * （历史教训：词表连踩三轮“正面加了负面没加”）。
+ * NEGATIVE 用 `${INSTRUMENTAL_TERMS}` 插值构造、POSITIVE 用同一常量 + `不要人声`
+ * （POSITIVE 独有的裸词：`不要人声` 是器乐诉求，但裸“人声”不能进 NEGATIVE 词表，
+ * 否则“不要人声”会被误判为否定——此为两表**刻意保留**的唯一差异）。
+ */
+const INSTRUMENTAL_TERMS = '纯音乐|器乐|instrumental|纯乐器|轻音乐|无人声|无歌词|没有人声|没人声|去掉人声|没有歌词|无词'
 
-/** 否定前缀：不要/别/不想/避免 + 目标词 → 不是要求器乐。 */
-const NEGATIVE_INSTRUMENTAL_RE = new RegExp(`(?:不要|别|不想|避免)[^，,。；;]{0,12}${INSTRUMENTAL_TERMS}`, 'i')
+/**
+ * 否定前缀 + 目标词 → 不是要求器乐。
+ * “无歌词/无人声/去掉人声”类目标词在带否定前缀时（“不要无歌词的”“不要去掉人声”）
+ * 是“不要(无歌词)/不要(去掉人声)”= 要求人声/歌词，不是器乐诉求；裸诉求（“去掉人声”）
+ * 无否定前缀，由 POSITIVE 命中为器乐诉求。
+ */
+const NEGATIVE_INSTRUMENTAL_RE = new RegExp(`(?:不要|别|不想听|不想|不喜欢|不爱|讨厌|避免)[^，,。；;]{0,12}(?:${INSTRUMENTAL_TERMS})`, 'i')
 
-/** 肯定命中：目标词前跟段首或非句内标点（“想听纯音乐”“来点器乐”等）。 */
-const POSITIVE_INSTRUMENTAL_RE = new RegExp(`(?:^|[^，,。；;])${INSTRUMENTAL_TERMS}`, 'i')
+/**
+ * 肯定命中：只管目标词出现（否定前缀已由 NEGATIVE 先行排除，
+ * 句内标点会截断否定链，无需前导标点排除——“不要华语，纯音乐”“；纯音乐”都算要求器乐）。
+ * 额外包含 `不要人声`（见 INSTRUMENTAL_TERMS 注释：仅 POSITIVE 有意多出的词）。
+ */
+const POSITIVE_INSTRUMENTAL_RE = new RegExp(`(?:${INSTRUMENTAL_TERMS})|不要人声`, 'i')
 
 /** 连续性最小结构（只需 vocal 维度；与 judgment.ContinuityRating 兼容）。 */
 export interface VocalContinuity {
@@ -37,8 +58,8 @@ export interface InstrumentalCandidate {
 
 /**
  * 用户是否要求纯音乐/器乐：
- * 否定前缀（“不要纯音乐”“别来纯音乐”）→ false；
- * 否则命中目标词（“纯音乐”“想听纯音乐”“来点器乐”等）→ true。
+ * 否定前缀（“不要纯音乐”“别来纯音乐”“我不喜欢纯音乐”）→ false；
+ * 否则命中目标词（“纯音乐”“想听纯音乐”“来点器乐”“不要人声”等）→ true。
  * “讲纯音乐史”这类误判可接受（非否定即视为要求）。
  */
 export const wantsInstrumental = (stateWords: string): boolean => {
@@ -49,7 +70,9 @@ export const wantsInstrumental = (stateWords: string): boolean => {
 
 /**
  * 候选是否器乐：元数据信号（title/artist/album/tags 命中器乐词）
- * 或 AI 行 vocal 连续性明确低（有限数字且 < 0.4 → 器乐推断）。
+ * 或 AI 行 vocal 连续性明确低（number 且 < 0.4 → 器乐推断）。
+ * vocal 只认数字：LLM 行 continuity.vocal 为 null/'' 是常见缺失形态，
+ * Number(null)/Number('') 恒为 0，强转会把缺失当“低连续性”误放行人声候选。
  */
 export const candidateIsInstrumental = (
   track: InstrumentalCandidate | null | undefined,
@@ -58,8 +81,8 @@ export const candidateIsInstrumental = (
   const t = track ?? {}
   const hay = `${t.title ?? ''} ${t.artist ?? ''} ${t.album ?? ''} ${(t.tags ?? []).join(' ')}`.toLowerCase()
   if (INSTRUMENTAL_META_RE.test(hay)) return true
-  const vocal = Number((continuity ?? {})?.vocal)
-  return Number.isFinite(vocal) && vocal < 0.4
+  const vocal = (continuity ?? {})?.vocal
+  return typeof vocal === 'number' && vocal < 0.4
 }
 
 /**
