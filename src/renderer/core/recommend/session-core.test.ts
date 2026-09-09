@@ -228,6 +228,30 @@ describe('appendToPath - 路径追加顺序', () => {
     // assert
     expect(state.path).toHaveLength(1)
   })
+
+  it('同曲不同 id 变体合并为一条（位置不变，字段取后来传入的 item）', () => {
+    // arrange（同一首歌两个平台变体：artist 串顺序不同、id 不同）
+    let state = create()
+    state = appendToPath(state, plannedItem('r1', 'mpi, Laco, Benjamin, 薄野弘之', 'Möbius'))
+    state = appendToPath(state, plannedItem('r1-other', 'Adele', 'Hello'))
+    // act
+    state = appendToPath(state, plannedItem('r2', 'Benjamin, Laco, 薄野弘之', 'Möbius'))
+    // assert（Möbius 变体合并为一条且位置不变，字段取后来传入的 item）
+    expect(state.path).toHaveLength(2)
+    expect(state.path[0].id).toBe('r2')
+    expect(state.path[0].artist).toBe('Benjamin, Laco, 薄野弘之')
+    expect(state.path[1].id).toBe('r1-other')
+  })
+
+  it('不同曲照常追加两条', () => {
+    // arrange
+    let state = create()
+    // act
+    state = appendToPath(state, plannedItem('r1', 'Adele', 'Hello'))
+    state = appendToPath(state, plannedItem('r2', 'Coldplay', 'Yellow'))
+    // assert
+    expect(state.path.map(p => p.id)).toEqual(['r1', 'r2'])
+  })
 })
 
 describe('buildReplanInstruction - 反馈拼接一句话', () => {

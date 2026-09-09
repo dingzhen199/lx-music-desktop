@@ -7,6 +7,8 @@
  * 播放器/事件/引擎的编排见 session.ts（薄层）。
  */
 
+import { sameSong } from './sameSong'
+
 /** 探索距离下限（feedback far 的边界）。 */
 export const RADIUS_MIN = 10
 /** 探索距离上限。 */
@@ -137,11 +139,14 @@ export const addRecommendedIds = (state: SessionState, ids: string[]): SessionSt
 }
 
 /**
- * 追加/更新路径条目：同 id 只保留一条（planned 更新为 played 时位置不变）；
- * 超出 MAX_PATH 裁掉最旧条目。无 id 条目按追加处理。
+ * 追加/更新路径条目：同 id 或同曲（sameSong，同曲不同 id 变体）只保留一条
+ * （planned 更新为 played 时位置不变，字段取后来传入的 item）；
+ * 超出 MAX_PATH 裁掉最旧条目。无 id 且非同曲条目按追加处理。
  */
 export const appendToPath = (state: SessionState, item: SessionPathItem): SessionState => {
-  const index = item.id == null ? -1 : state.path.findIndex(p => p.id === item.id)
+  const index = state.path.findIndex(p =>
+    (item.id != null && p.id === item.id) || sameSong(p, item),
+  )
   let path: SessionPathItem[]
   if (index >= 0) {
     path = state.path.slice()

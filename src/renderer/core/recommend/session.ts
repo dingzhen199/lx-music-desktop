@@ -14,6 +14,7 @@ import { removeTempPlayList } from '@renderer/store/player/action'
 import { playMusicInfoNow } from '@renderer/core/player'
 import { exploreOnce } from './engine'
 import type { AiConfig, ExploreAnchor, ExploreOptions, ExploreResult } from './engine'
+import { sameSong } from './sameSong'
 import type { RankPathInput, TrackAnalysis } from './prompts'
 import {
   RADIUS_DEFAULT,
@@ -163,6 +164,8 @@ const buildExploreOptions = (mode: 'initial' | 'refill'): ExploreOptions | null 
       ? {
           reuseAnalysis: analysisCache ?? undefined,
           excludeIds: [...st.recommendedIds],
+          // 已推荐/已播曲目跨批次排除（artist/title 按 sameSong，防同曲不同 id 变体重复入队）
+          excludeTracks: st.path.map(p => ({ artist: p.artist, title: p.title })),
           recentPath: toRecentPath(st),
         }
       : {}),
@@ -267,7 +270,8 @@ const handleMusicToggled = (): void => {
   if (!st || !play) return
   const onPath = st.recommendedIds.includes(play.id)
   if (onPath) {
-    const existing = st.path.find(p => p.id === play.id)
+    // 与 appendToPath 的合并语义一致：同 id 或同曲（sameSong）都视为当前路径条目
+    const existing = st.path.find(p => p.id === play.id || sameSong(p, { artist: play.singer, title: play.name }))
     state.value = appendToPath(st, {
       id: play.id,
       artist: play.singer,

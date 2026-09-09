@@ -3,7 +3,7 @@
  * 用法: node e2e/deep.js
  */
 const { launchApp, collectErrors, screenshot, ART_DIR } = require('./harness')
-const { clickPathRowAndVerify, clickNonCurrentPathRow, readPlaybar, dismissOverlayModal } = require('./pathProbe')
+const { clickPathRowAndVerify, clickNonCurrentPathRow, readPlaybar, dismissOverlayModal, sameSongText } = require('./pathProbe')
 const fs = require('fs')
 
 async function agree(window) {
@@ -40,6 +40,30 @@ const readAnchorTitle = async(window) => {
     const here = Array.from(document.querySelectorAll('div')).find(el => el.textContent?.trim() === '你在这里')
     const meta = here?.parentElement
     return meta?.children?.[1]?.textContent?.trim() ?? ''
+  })
+}
+
+/**
+ * 读取探索路径全部行 {title, artist}（played/planned/isCurrent 都算）。
+ * 行结构（与 D3b 行选择兼容）：span 角色徽章（守住/挖深/打开/转向/落地）→ parentElement（pathItem 行）
+ * → children[1]（pathMain）→ children[0]（pathName）→ title span（children[0]）+ artist span
+ * （children[1]，文本以 "- " 开头，trim 后去掉前导 "- "）。
+ */
+const readPathRows = async(window) => {
+  return window.evaluate(() => {
+    const roles = ['守住', '挖深', '打开', '转向', '落地']
+    const badges = Array.from(document.querySelectorAll('span')).filter(d => roles.includes(d.textContent?.trim()))
+    const rows = []
+    for (const b of badges) {
+      const row = b.parentElement
+      const name = row?.children?.[1]?.children?.[0]
+      if (!name) continue
+      const title = name.children?.[0]?.textContent?.trim() ?? ''
+      const artistRaw = name.children?.[1]?.textContent?.trim() ?? ''
+      const artist = artistRaw.startsWith('- ') ? artistRaw.slice(2).trim() : artistRaw
+      if (title) rows.push({ title, artist })
+    }
+    return rows
   })
 }
 
@@ -145,6 +169,27 @@ const readAnchorTitle = async(window) => {
   {
     const r = await clickPathRowAndVerify(window)
     record('D3b-路径点击跳播', r.matched, r.detail)
+  }
+
+  // D3c-路径无重复曲目：用户可见症状直锁（同曲多 id/artist 变体不得在路径里出两行）
+  // 当前时刻全部路径行（含 D3b 刚点击的 planned→played 与 isCurrent 行）两两 sameSongText 比较；
+  // 行数 < 2 时不足以产生重复，按 PASS 处理（限流环境路径可能很少，避免误杀）。
+  {
+    const rows = await readPathRows(window)
+    if (rows.length < 2) {
+      record('D3c-路径无重复曲目', true, `rows=${rows.length}（行数不足，不足以产生重复）`)
+    } else {
+      const dups = []
+      for (let i = 0; i < rows.length; i++) {
+        for (let j = i + 1; j < rows.length; j++) {
+          if (sameSongText(rows[i], rows[j])) {
+            dups.push(`"${rows[i].title}"(${rows[i].artist}) == "${rows[j].title}"(${rows[j].artist})`)
+          }
+        }
+      }
+      record('D3c-路径无重复曲目', dups.length === 0,
+        `rows=${rows.length}${dups.length ? ` dup=${JSON.stringify(dups)}` : ''}`)
+    }
   }
 
   // far 反馈收紧距离（默认 35 → 27 → 19 → 文案“几乎不离开这里”）

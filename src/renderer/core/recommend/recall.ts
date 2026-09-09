@@ -4,8 +4,9 @@
  * 召回方向（from-here bridge/server.js recallPool 语义的 lx 适配）：
  * - 同艺人搜索（anchor.singer/name，硬约束冲突时跳过）；
  * - 语义关键词跨源搜索（复用 T-B0 recallQueries，每关键词每源限 10 首）；
- * - 本地“我喜欢”列表（弱偏好源 taste=liked）与用户收藏歌单（source=playlist）作候选池补充；
- * - 过滤 anchor 自身与无 id（不可播放类）的条目，归一化为 TrackLike。
+ * - 本地用户收藏歌单（source=playlist）作候选池补充；
+ * - 过滤 anchor 自身与无 id（不可播放类）的条目，归一化为 TrackLike；
+ * - 「我喜欢」列表不再作为候选源（见 candidatePool 红心排除），仅参与候选标记展示。
  */
 
 import { getListMusics } from '@renderer/store/list/listManage/rendererListManage'
@@ -13,7 +14,8 @@ import { loveList, userLists } from '@renderer/store/list/listManage/state'
 import { playedList } from '@renderer/store/player/state'
 import { toNewMusicInfo } from '@renderer/utils'
 import musicSdk from '@renderer/utils/musicSdk'
-import { recallSourceLanguageBlocked, SEMANTIC_DISTANCE_BASE, SEMANTIC_DISTANCE_STEP, trimSemanticQueries } from './gates'
+import { buildCandidatePool } from './candidatePool'
+import { SEMANTIC_DISTANCE_BASE, SEMANTIC_DISTANCE_STEP, trimSemanticQueries } from './gates'
 import { sameArtistConflictsWithConstraints } from './judgment'
 import type { AnalysisShape, LanguageConstraints, TrackLike } from './judgment'
 import { recallQueries } from './prompts'
@@ -94,17 +96,11 @@ const distanceFor = (kind: RecallQuery['kind'], semanticIndex: number): number =
   return kind === 'same-artist' ? 8 : SEMANTIC_DISTANCE_BASE + semanticIndex * SEMANTIC_DISTANCE_STEP
 }
 
-/** 与 anchor 是同一首歌（id 相同，或艺人+歌名一致）。 */
-const sameTrack = (candidate: RecallCandidate, anchor: RecallAnchor): boolean => {
-  if (anchor.id && candidate.encryptedId === anchor.id) return true
-  const cArtist = String(candidate.artist ?? '').toLowerCase()
-  const cTitle = String(candidate.title ?? '').toLowerCase()
-  const aArtist = String(anchor.artist ?? '').toLowerCase()
-  const aTitle = String(anchor.title ?? '').toLowerCase()
-  return Boolean(cArtist && cTitle && cArtist === aArtist && cTitle === aTitle)
-}
-
-/** 归一化候选为 TrackLike（source 为召回来源标记）。 */
+/**
+ * 归一化候选为 TrackLike（source 为召回来源标记）。
+ * loveIds：红心歌已在候选池（buildCandidatePool 红心排除）硬排除，
+ * 此处仅保留 liked 标记计算（恒 false），供未来弱偏好/展示复用。
+ */
 const toCandidate = (info: LX.Music.MusicInfo, source: string, extra: {
   distance: number
   reason: string
@@ -171,8 +167,8 @@ const searchByQuery = async(
  * 召回候选（并行）：
  * - 同艺人搜索（若与语言硬约束冲突则跳过）；
  * - 语义关键词跨源搜索；
- * - 本地“我喜欢”列表（liked）与用户收藏歌单（playlist）候选池补充；
- * 过滤 anchor 自身与无 id 条目，按 id 去重（保留先出现来源的版本）。
+ * - 本地用户收藏歌单（playlist）候选池补充；
+ * 合并后经 candidatePool 统一去重（id → 锚点排除 → 红心排除 → 语言门控 → 同曲去重）。
  */
 export const recallCandidates = async(
   anchor: RecallAnchor,
@@ -184,8 +180,8 @@ export const recallCandidates = async(
   const errors: string[] = []
   const constraints: LanguageConstraints = { excludedLanguages: options.excludedLanguages ?? [] }
 
-  // 本地池：我喜欢列表 + 用户收藏歌单（无 id 歌曲不会出现，均为可播放曲目）
-  // 各来源截断上限：离线池仅作弱偏好 tie-break，超量只会带来排序噪音与带宽浪费。
+  // 本地池：用户收藏歌单（playlist，LOCAL_POOL_CAP 截断）；
+  // 「我喜欢」列表仅用于红心排除与计数展示，不再作为候选源（全量读取，截断会让 >200 首的红心曲漏排）。
   const LOCAL_POOL_CAP = 200
   const loveIds = new Set<string>()
   const recentIds = new Set<string>()
@@ -195,7 +191,7 @@ export const recallCandidates = async(
   let likedItems: LX.Music.MusicInfo[] = []
   const playlistItems: LX.Music.MusicInfo[] = []
   try {
-    likedItems = (await getListMusics(loveList.id)).slice(0, LOCAL_POOL_CAP)
+    likedItems = await getListMusics(loveList.id)
     for (const m of likedItems) loveIds.add(m.id)
   } catch (err) {
     errors.push(`liked: ${(err as Error).message}`)
@@ -233,41 +229,25 @@ export const recallCandidates = async(
     })
   }))
 
-  const items: RecallCandidate[] = []
-  const seen = new Set<string>()
-  const pushCandidate = (c: RecallCandidate) => {
-    const key = String(c.encryptedId ?? `${c.artist}::${c.title}`)
-    if (seen.has(key)) return
-    if (sameTrack(c, anchor)) return
-    // 源头语言门控（S1）：排除语言时仅拦高置信元数据提示的候选（rank 阶段守门仍保留为兜底）。
-    if (recallSourceLanguageBlocked(c, constraints)) return
-    seen.add(key)
-    items.push(c)
-  }
-
-  for (const list of searchResults) {
-    for (const c of list) pushCandidate(c)
-  }
-  for (const m of likedItems) {
-    pushCandidate(toCandidate(m, 'liked', {
-      distance: 12,
-      reason: '来自你喜欢的列表（弱偏好，仅作 tie-break）',
-      loveIds,
-      recentIds,
-    }))
-  }
-  for (const m of playlistItems) {
-    pushCandidate(toCandidate(m, 'playlist', {
-      distance: 30,
-      reason: '来自你的收藏歌单（弱偏好，仅作候选池补充）',
-      loveIds,
-      recentIds,
-    }))
-  }
+  // 候选池统一去重（id → 锚点排除 → 红心排除 → 语言门控 → 同曲去重）：
+  // 跨源搜索结果在前、本地收藏歌单池在后（同曲去重保留先出现者）。
+  const lovedTracks = likedItems.map(m => ({ artist: m.singer, title: m.name }))
+  const items: RecallCandidate[] = buildCandidatePool(
+    [
+      ...searchResults.flat(),
+      ...playlistItems.map(m => toCandidate(m, 'playlist', {
+        distance: 30,
+        reason: '来自你的收藏歌单（弱偏好，仅作候选池补充）',
+        loveIds,
+        recentIds,
+      })),
+    ],
+    { anchor: { artist: anchor.artist, title: anchor.title, id: anchor.id }, lovedTracks, constraints },
+  )
 
   sourceCounts['semantic-search'] = items.filter(c => c.source === 'semantic-search').length
   sourceCounts['same-artist'] = items.filter(c => c.source === 'same-artist').length
-  sourceCounts.liked = items.filter(c => c.source === 'liked').length
+  // liked 保留「我喜欢」列表条数（展示用；不再作为候选源，候选侧恒 0，此处不覆盖）
   sourceCounts.playlist = items.filter(c => c.source === 'playlist').length
 
   return { items, meta: { sourceCounts, error: errors.length ? errors.join('；') : null } }
