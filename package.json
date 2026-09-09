@@ -143,6 +143,7 @@
     "less-loader": "^12.3.2",
     "mini-css-extract-plugin": "^2.10.2",
     "node-loader": "^2.1.0",
+    "playwright-core": "^1.63.0",
     "postcss": "^8.5.12",
     "postcss-loader": "^8.2.1",
     "postcss-pxtorem": "^6.1.0",
