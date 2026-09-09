@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractJsonChunks, looseParse, parseLooseJson } from './json'
+import { extractJsonChunks, extractRankingRows, looseParse, parseLooseJson } from './json'
 
 describe('looseParse - 宽松 JSON 解析', () => {
   it('空输入返回 null', () => {
@@ -66,5 +66,62 @@ describe('parseLooseJson - LLM 输出健壮解析入口', () => {
   it('garbled 内容回退 {raw} 不抛错', () => {
     // act & assert
     expect(parseLooseJson('{"ranking":[{"candidate_id":0,] 残缺')).toEqual({ raw: '{"ranking":[{"candidate_id":0,] 残缺' })
+  })
+})
+
+describe('extractRankingRows - 提取候选行', () => {
+  it('直接数组原样返回', () => {
+    // act & assert
+    const input = [{ candidate_id: 0, score: 90 }, { candidate_id: 3, score: 70 }]
+    expect(extractRankingRows(input)).toEqual(input)
+  })
+
+  it('{ranking:[…]} 提取数组', () => {
+    // act & assert
+    expect(extractRankingRows({ ranking: [{ candidate_id: 1, score: 80 }] })).toEqual([{ candidate_id: 1, score: 80 }])
+  })
+
+  it('{sequence:[…]} 提取数组', () => {
+    // act & assert
+    expect(extractRankingRows({ sequence: [{ candidate_id: 2, score: 60 }] })).toEqual([{ candidate_id: 2, score: 60 }])
+  })
+
+  it('{results:[…]} 提取数组', () => {
+    // act & assert
+    expect(extractRankingRows({ results: [{ candidate_id: 4, score: 55 }] })).toEqual([{ candidate_id: 4, score: 55 }])
+  })
+
+  it('双重编码：{ranking:"字符串编码的JSON"}', () => {
+    // act & assert
+    expect(extractRankingRows({ ranking: '[\n  {"candidate_id": 0, "score": 88},\n  {"candidate_id": 1, "score": 77}\n]' }))
+      .toEqual([{ candidate_id: 0, score: 88 }, { candidate_id: 1, score: 77 }])
+  })
+
+  it('围栏 + 前后散文包裹', () => {
+    // act & assert
+    expect(extractRankingRows('以下是排序结果：\n```json\n{"ranking":[{"candidate_id":0,"score":91}]}\n```\n请查收。'))
+      .toEqual([{ candidate_id: 0, score: 91 }])
+  })
+
+  it('{chunks:[…]} 多块拼接并去重', () => {
+    // act & assert
+    const content = {
+      chunks: [
+        { ranking: [{ candidate_id: 0, score: 50 }] },
+        { ranking: [{ candidate_id: 0, score: 50 }, { candidate_id: 1, score: 60 }] },
+      ],
+    }
+    expect(extractRankingRows(content)).toEqual([{ candidate_id: 0, score: 50 }, { candidate_id: 1, score: 60 }])
+  })
+
+  it('截断残缺输入返回 []', () => {
+    // act & assert
+    expect(extractRankingRows('{"ranking":[{"candidate_id":0,"score":50]')).toEqual([])
+  })
+
+  it('非对象/空对象行被过滤', () => {
+    // act & assert
+    expect(extractRankingRows({ ranking: [null, 42, 'x', {}, [], { candidate_id: 5, score: 33 }] }))
+      .toEqual([{ candidate_id: 5, score: 33 }])
   })
 })

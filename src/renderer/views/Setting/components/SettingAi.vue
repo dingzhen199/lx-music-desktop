@@ -17,6 +17,9 @@ dd
     .p
       | {{ $t('setting__ai_model') }}
       base-input.gap-left(:model-value="appSetting['ai.model']" :placeholder="$t('setting__ai_model_tip')" @update:model-value="setModel")
+    .p
+      base-btn.btn(min :disabled="aiTestState === 'testing'" @click="handleTestConnect") {{ $t('setting__ai_test_btn') }}
+      span.gap-left(:class="{ [$style.testing]: aiTestState === 'testing', [$style.ok]: aiTestState === 'ok', [$style.fail]: aiTestState === 'fail' || aiTestState === 'needConfig' }") {{ aiTestText }}
     .p.small
       | {{ $t('setting__ai_tip') }}
 
@@ -33,7 +36,9 @@ dd
 <script>
 import { appSetting, updateSetting } from '@renderer/store/setting'
 import { debounce } from '@common/utils'
+import { computed, ref } from '@common/utils/vueTools'
 import { useI18n } from '@renderer/plugins/i18n'
+import { llmComplete } from '@renderer/core/recommend/llm'
 
 export default {
   name: 'SettingAi',
@@ -56,6 +61,51 @@ export default {
       updateSetting({ 'recommend.radius': Number(value) })
     }, 300)
 
+    // 测试连接状态五态（idle/testing/ok/fail/needConfig；needConfig=缺少 Key/模型时的提示态）
+    const aiTestState = ref('idle')
+    const aiTestMessage = ref('')
+
+    const aiTestText = computed(() => {
+      switch (aiTestState.value) {
+        case 'testing':
+          return t('setting__ai_testing')
+        case 'ok':
+          return t('setting__ai_test_ok')
+        case 'needConfig':
+          return t('setting__ai_test_need_config')
+        case 'fail':
+          return `${t('setting__ai_test_fail_prefix')}${aiTestMessage.value}`
+        default:
+          return ''
+      }
+    })
+
+    const handleTestConnect = async() => {
+      if (aiTestState.value === 'testing') return
+      const apiKey = appSetting['ai.apiKey']?.trim()
+      const model = appSetting['ai.model']?.trim()
+      if (!apiKey || !model) {
+        aiTestState.value = 'needConfig'
+        aiTestMessage.value = ''
+        return
+      }
+      aiTestState.value = 'testing'
+      aiTestMessage.value = ''
+      try {
+        await llmComplete({
+          protocol: appSetting['ai.provider'],
+          baseUrl: appSetting['ai.baseUrl']?.trim(),
+          apiKey,
+          model,
+          messages: [{ role: 'user', content: '请只回复：OK' }],
+        })
+        aiTestState.value = 'ok'
+      } catch (err) {
+        aiTestState.value = 'fail'
+        aiTestMessage.value = String(err?.message ?? err).slice(0, 300)
+      }
+    }
+
     return {
       appSetting,
       updateSetting,
@@ -65,6 +115,9 @@ export default {
       setApiKey,
       setModel,
       setRadius,
+      aiTestState,
+      aiTestText,
+      handleTestConnect,
     }
   },
 }
@@ -76,5 +129,14 @@ export default {
   vertical-align: middle;
   display: inline-block;
   width: 160px;
+}
+.testing {
+  color: var(--color-font-label);
+}
+.ok {
+  color: var(--color-primary);
+}
+.fail {
+  color: var(--color-badge-secondary);
 }
 </style>

@@ -93,3 +93,61 @@ export const parseLooseJson = (text: unknown): unknown => {
   if (chunks.length > 1) return { chunks }
   return direct
 }
+
+/** 候选行可能的键名（按优先级依次尝试）。 */
+const RANKING_KEYS = ['ranking', 'rows', 'results', 'candidates', 'sequence', 'key'] as const
+
+/** 递归提取候选行：数组直接用；对象按键名优先级取；字符串先 parseLooseJson 再重复本步。 */
+const pickRankingRows = (value: unknown, depth: number): unknown[] | null => {
+  if (depth > 6) return null
+  if (Array.isArray(value)) return value
+  if (typeof value === 'string') {
+    const parsed = parseLooseJson(value)
+    if (parsed === value) return null
+    return pickRankingRows(parsed, depth + 1)
+  }
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>
+    for (const key of RANKING_KEYS) {
+      if (!(key in obj)) continue
+      const rows = pickRankingRows(obj[key], depth + 1)
+      if (rows) return rows
+    }
+    // 多块输出（parseLooseJson 的 {chunks} 包）：逐块递归、拼接
+    if (Array.isArray(obj.chunks)) {
+      const merged: unknown[] = []
+      for (const chunk of obj.chunks) {
+        const rows = pickRankingRows(chunk, depth + 1)
+        if (rows) merged.push(...rows)
+      }
+      if (merged.length) return merged
+    }
+  }
+  return null
+}
+
+/**
+ * 提取 ranking 候选行（LLM 输出健壮化）：
+ * 1) 字符串输入先 parseLooseJson（结构体输入直接使用）；
+ * 2) 数组直接用；
+ * 3) 对象按 ranking/rows/results/candidates/sequence/key 依次取第一个数组
+ *    （字符串值先 parseLooseJson 再重复本步，无法解析则跳过）；
+ * 4) {chunks:[…]} 多块递归拼接并去重；
+ * 5) 仅保留非空对象行；找不到返回 []。
+ */
+export const extractRankingRows = (content: unknown): unknown[] => {
+  const parsed = typeof content === 'string' ? parseLooseJson(content) : content
+  const rows = pickRankingRows(parsed, 0)
+  if (!rows) return []
+  const seen = new Set<string>()
+  const out: unknown[] = []
+  for (const row of rows) {
+    if (row == null || typeof row !== 'object' || Array.isArray(row)) continue
+    if (Object.keys(row).length === 0) continue
+    const key = JSON.stringify(row)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(row)
+  }
+  return out
+}

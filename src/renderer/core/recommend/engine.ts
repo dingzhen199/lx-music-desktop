@@ -13,7 +13,7 @@ import { playProgress } from '@renderer/store/player/playProgress'
 import { playMusicInfo } from '@renderer/store/player/state'
 import { getFeatureCollector, startFeatureCollection, stopFeatureCollection } from './feature'
 import type { FeatureSheet } from './feature'
-import { parseLooseJson } from './json'
+import { extractRankingRows, parseLooseJson } from './json'
 import {
   aestheticReject,
   coarseWorldBreak,
@@ -29,7 +29,7 @@ import {
   publicReason,
   rowLanguageBlocked,
 } from './judgment'
-import type { LanguageConstraints, TrackLike } from './judgment'
+import type { LanguageConstraints } from './judgment'
 import { llmComplete } from './llm'
 import {
   ANALYSIS_SYSTEM,
@@ -91,6 +91,8 @@ export interface ExploreItemView {
   reason: string
   journeyRole: string
   distance: number | null
+  /** 可插入队列播放的完整音乐信息（与 addTempPlayList 同源；探索路径点击跳播用）。 */
+  musicInfo?: LX.Music.MusicInfoOnline
 }
 
 /** exploreOnce 结果视图。 */
@@ -171,6 +173,19 @@ const fallbackAnalysis = (anchor: AnchorLike): TrackAnalysis => {
   }, anchor)
 }
 
+// ============================ AI 排序重试 ============================
+
+/**
+ * AI 排序失败重试策略：真实 LLM 输出非确定性（偶发截断/格式漂移/网络抖动），
+ * 失败一次即回退本地常导致可用但更好的 AI 排序被放弃；
+ * 最多初始 1 次 + 重试 2 次（共 3 次调用），间隔 800/1600ms 指数退避。
+ */
+const AI_RANK_MAX_RETRY = 2
+const AI_RANK_RETRY_DELAY_MS = 800
+
+/** 延时（重试退避用；仓库无通用 sleep/delay 工具，本地实现）。 */
+const sleep = async(ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+
 // ============================ AI 排序（from-here aiRank 语义） ============================
 
 const clamp01 = (value: unknown): number | null => {
@@ -197,6 +212,9 @@ const rankingWorldBreak = (row: unknown, radius: number): boolean => {
   return false
 }
 
+/** AI 排序分批大小：候选最多 48 条，单次提示过长既拖慢生成也容易触发超时；分批让模型每次只判断最多 16 首。 */
+const RANK_BATCH_SIZE = 16
+
 /** LLM 排序：字段映射参照 from-here aiRank 的 enriched / aestheticReject 语义。 */
 const aiRank = async(
   ai: AiConfig,
@@ -214,71 +232,79 @@ const aiRank = async(
   if (!candidates.length) return []
 
   const instruction = [stateWords, excludes ? `不要：${excludes}` : '', constraintPrompt(constraints)].filter(Boolean).join('；')
-  const prompt = buildRankingPrompt({
-    anchor,
-    radius,
-    instruction,
-    analysis,
-    candidates: candidates as RankCandidateInput[],
-    recentPath: recentPath.length ? recentPath : undefined,
-  })
-  const content = await callAi(ai, RANK_SYSTEM, prompt)
-  const parsed = parseLooseJson(content)
-  const arr = Array.isArray(parsed) ? parsed : (Array.isArray((parsed as { ranking?: unknown[] })?.ranking) ? (parsed as { ranking: unknown[] }).ranking : [])
-  if (!arr.length) throw new Error('AI Provider 未返回 ranking JSON 数组')
-  const parsedObj = (parsed ?? {}) as { sequence?: unknown[] }
-  const sequence = Array.isArray(parsedObj.sequence) ? parsedObj.sequence.map(Number).filter(Number.isFinite) : []
-  const sequenceOrder = new Map(sequence.map((id, i) => [Number(id), i]))
-
-  const rows = [...arr].sort((a, b) => {
-    const aObj = (a ?? {}) as Record<string, unknown>
-    const bObj = (b ?? {}) as Record<string, unknown>
-    const ai = sequenceOrder.has(Number(aObj.candidate_id ?? aObj.i)) ? sequenceOrder.get(Number(aObj.candidate_id ?? aObj.i))! : 999
-    const bi = sequenceOrder.has(Number(bObj.candidate_id ?? bObj.i)) ? sequenceOrder.get(Number(bObj.candidate_id ?? bObj.i))! : 999
-    if (ai !== bi) return ai - bi
-    return (Number(bObj.score) || 0) - (Number(aObj.score) || 0)
-  })
+  const recentPathInput = recentPath.length ? recentPath : undefined
 
   const picked: RecallCandidate[] = []
   const pickedIds = new Set<string>()
-  for (const x of rows) {
-    const row = (x ?? {}) as Record<string, any>
-    const idx = Number(row.candidate_id ?? row.i)
-    const track = candidates[idx]
-    if (!track || pickedIds.has(String(track.encryptedId))) continue
-    if (rowLanguageBlocked(row, track, constraints)) continue
-    if (!eligibleByFormat(track, analysis, stateWords, excludes) || exclusionHit(track, excludes)) continue
-    if (rankingWorldBreak(row, radius)) continue
-    const confidence = String(row.confidence || 'medium').toLowerCase()
-    if (radius <= 45 && confidence === 'low') continue
+  // 分批排序：每批独立调用 LLM（批次内 candidate_id 仍从 0 编号、行级守门不变）；
+  // score 是同一标尺（0-1），合并后按 score 全局排序再走弧线（批内 LLM 的 sequence 只做批内排序）。
+  for (let start = 0; start < candidates.length; start += RANK_BATCH_SIZE) {
+    const batch = candidates.slice(start, start + RANK_BATCH_SIZE)
+    const content = await callAi(ai, RANK_SYSTEM, buildRankingPrompt({
+      anchor,
+      radius,
+      instruction,
+      analysis,
+      candidates: batch as RankCandidateInput[],
+      recentPath: recentPathInput,
+    }))
+    const parsed = parseLooseJson(content)
+    const arr = extractRankingRows(parsed)
+    if (!arr.length) throw new Error('AI Provider 未返回 ranking JSON 数组')
+    const parsedObj = (parsed ?? {}) as { sequence?: unknown[] }
+    const sequence = Array.isArray(parsedObj.sequence) ? parsedObj.sequence.map(Number).filter(Number.isFinite) : []
+    const sequenceOrder = new Map(sequence.map((id, i) => [Number(id), i]))
 
-    const label = String(row.distance_from_anchor || '').toLowerCase()
-    const explicit = Number(row.perceptual_distance)
-    let mapped: number | null = Number.isFinite(explicit) ? Math.max(0, Math.min(100, explicit)) : null
-    if (mapped == null) mapped = label === 'near' ? 24 : label === 'medium' ? 50 : label === 'far' ? 76 : 50
-    if (mapped > radius + 10 && radius <= 65) continue
+    const rows = [...arr].sort((a, b) => {
+      const aObj = (a ?? {}) as Record<string, unknown>
+      const bObj = (b ?? {}) as Record<string, unknown>
+      const ai = sequenceOrder.has(Number(aObj.candidate_id ?? aObj.i)) ? sequenceOrder.get(Number(aObj.candidate_id ?? aObj.i))! : 999
+      const bi = sequenceOrder.has(Number(bObj.candidate_id ?? bObj.i)) ? sequenceOrder.get(Number(bObj.candidate_id ?? bObj.i))! : 999
+      if (ai !== bi) return ai - bi
+      return (Number(bObj.score) || 0) - (Number(aObj.score) || 0)
+    })
 
-    const enriched: RecallCandidate = {
-      ...track,
-      distance: mapped,
-      reason: publicReason(String(row.reason ?? ''), '它接住了起点没有说完的那一部分'),
-      journeyRole: String(row.journey_role || row.journeyRole || 'open').toLowerCase(),
-      nextSongWorthiness: row.next_song_worthiness ?? row.nextSongWorthiness,
-      meaningfulDifference: row.meaningful_difference ?? row.meaningfulDifference,
-      surpriseValue: row.surprise_value ?? row.surpriseValue,
-      obviousness: row.obviousness,
-      clicheRisk: row.cliche_risk ?? row.clicheRisk,
-      sequenceIndex: sequenceOrder.get(idx),
-      aiScore: Number(row.score) || 0,
-      continuity: row.continuity || {},
-      worldBreaks: Array.isArray(row.world_breaks) ? row.world_breaks : [],
-      confidence,
+    for (const x of rows) {
+      const row = (x ?? {}) as Record<string, any>
+      const idx = Number(row.candidate_id ?? row.i)
+      const track = batch[idx]
+      if (!track || pickedIds.has(String(track.encryptedId))) continue
+      if (rowLanguageBlocked(row, track, constraints)) continue
+      if (!eligibleByFormat(track, analysis, stateWords, excludes) || exclusionHit(track, excludes)) continue
+      if (rankingWorldBreak(row, radius)) continue
+      const confidence = String(row.confidence || 'medium').toLowerCase()
+      if (radius <= 45 && confidence === 'low') continue
+
+      const label = String(row.distance_from_anchor || '').toLowerCase()
+      const explicit = Number(row.perceptual_distance)
+      let mapped: number | null = Number.isFinite(explicit) ? Math.max(0, Math.min(100, explicit)) : null
+      if (mapped == null) mapped = label === 'near' ? 24 : label === 'medium' ? 50 : label === 'far' ? 76 : 50
+      if (mapped > radius + 10 && radius <= 65) continue
+
+      const enriched: RecallCandidate = {
+        ...track,
+        distance: mapped,
+        reason: publicReason(String(row.reason ?? ''), '它接住了起点没有说完的那一部分'),
+        journeyRole: String(row.journey_role || row.journeyRole || 'open').toLowerCase(),
+        nextSongWorthiness: row.next_song_worthiness ?? row.nextSongWorthiness,
+        meaningfulDifference: row.meaningful_difference ?? row.meaningfulDifference,
+        surpriseValue: row.surprise_value ?? row.surpriseValue,
+        obviousness: row.obviousness,
+        clicheRisk: row.cliche_risk ?? row.clicheRisk,
+        sequenceIndex: sequenceOrder.get(idx),
+        aiScore: Number(row.score) || 0,
+        continuity: row.continuity || {},
+        worldBreaks: Array.isArray(row.world_breaks) ? row.world_breaks : [],
+        confidence,
+      }
+      if (aestheticReject(enriched, radius)) continue
+      picked.push(enriched)
+      pickedIds.add(String(track.encryptedId))
     }
-    if (aestheticReject(enriched, radius)) continue
-    picked.push(enriched)
-    pickedIds.add(String(track.encryptedId))
   }
   if (!picked.length) return []
+  // 跨批合并为全局序列：score 同标尺，按降序排；相同 score 保持批内顺序（稳定排序）
+  picked.sort((a, b) => (Number(b.aiScore) || 0) - (Number(a.aiScore) || 0))
   const arc = composeListeningArc(picked, anchor, radius, 8)
   return diversify(arc, anchor, 8) as RecallCandidate[]
 }
@@ -400,20 +426,28 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
       : '这次没有找到能加入播放队列的后续歌曲，请稍后重试，或把探索距离稍微打开一点。')
   }
 
-  // 4. 排序：LLM 优先（失败回退本地），AI 未配置直接本地
+  // 4. 排序：LLM 优先（抛错时自动重试，全部失败才回退本地），AI 未配置直接本地
   let ranked: RecallCandidate[] = []
   let engine: 'ai' | 'local' = 'local'
   let aiRankError: string | null = null
   if (options.ai?.apiKey) {
-    try {
-      const aiRanked = await aiRank(options.ai, pool, anchor, radius, stateWords, activeExcludes, analysis, constraints, options.recentPath)
-      if (aiRanked.length) {
-        ranked = aiRanked
-        engine = 'ai'
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const aiRanked = await aiRank(options.ai, pool, anchor, radius, stateWords, activeExcludes, analysis, constraints, options.recentPath)
+        if (aiRanked.length) {
+          ranked = aiRanked
+          engine = 'ai'
+          break
+        }
+        // 返回空数组而未抛错（多半是守门全部过滤），重试无意义，直接回退本地
+        break
+      } catch (err) {
+        aiRankError = (err as Error).message
+        const retry = attempt < AI_RANK_MAX_RETRY
+        console.warn('[AI rank fallback]', aiRankError, retry ? `，重试中(${attempt + 1}/${AI_RANK_MAX_RETRY})` : '')
+        if (!retry) break
+        await sleep(AI_RANK_RETRY_DELAY_MS * (attempt + 1))
       }
-    } catch (err) {
-      aiRankError = (err as Error).message
-      console.warn('[AI rank fallback]', aiRankError)
     }
   }
   if (!ranked.length) {
@@ -440,7 +474,7 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
     featureSheet,
     analysis: { summary: analysis.summary, aiUsed, error: aiAnalysisError },
     rawAnalysis: analysis,
-    candidates: ranked.map((t: TrackLike) => ({
+    candidates: ranked.map((t: RecallCandidate) => ({
       id: t.encryptedId ?? null,
       artist: t.artist ?? '',
       title: t.title ?? '',
@@ -449,6 +483,8 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
       reason: publicReason(String(t.reason ?? ''), '和起点仍有清楚的听感连续性'),
       journeyRole: normalizeRole(t.journeyRole),
       distance: Number.isFinite(Number(t.distance)) ? Number(t.distance) : null,
+      // 探索召回均为在线候选（SearchResult/列表条目），此处只透传给视图；类型收窄为在线条目
+      musicInfo: t.musicInfo as LX.Music.MusicInfoOnline,
     })),
     meta: {
       sourceCounts: recall.meta.sourceCounts,
