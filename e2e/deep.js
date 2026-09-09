@@ -205,10 +205,12 @@ const readPathRows = async(window) => {
     record('D4-far反馈收紧距离', false, '太远了按钮不可见')
   }
 
-  // 一句话约束
+  // 一句话约束（诉求 2：输入框改为受控草稿，点击“发送”按钮提交，不再 debounce 自动重排）
   const instructionInput = window.getByPlaceholder('如：更冷一点、不要华语、想听纯音乐')
   if (await instructionInput.isVisible().catch(() => false)) {
     await instructionInput.fill('不要华语')
+    const sendBtn = window.getByRole('button', { name: '发送' }).first()
+    await sendBtn.click().catch(() => false)
     await window.waitForTimeout(2500)
     const body = await window.evaluate(() => document.body.innerText)
     record('D5-一句话约束生效无崩溃', !/这次计划没有完成/.test(body), '')

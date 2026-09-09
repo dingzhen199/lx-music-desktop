@@ -38,6 +38,16 @@ export interface SessionAnchor {
 /** 路径条目状态：planned=已计划未播，played=已听过。 */
 export type PathState = 'played' | 'planned'
 
+/** 路径条目的批次标注：该条目来自哪次计划及其筛选条件快照（供路径分层展示）。 */
+export interface PathBatch {
+  /** 计划发起时的探索距离。 */
+  radius: number
+  /** 计划发起时的一句话约束（用户原样输入，不含反馈拼接）。 */
+  instruction: string
+  /** 该次计划实际使用的引擎（AI 或本地回退）。 */
+  engine: 'ai' | 'local'
+}
+
 /** 路径条目（含来源原因与弧线角色）。 */
 export interface SessionPathItem {
   id: string | null
@@ -47,6 +57,8 @@ export interface SessionPathItem {
   reason: string
   journeyRole: string
   state: PathState
+  /** 批次快照（计划入队时写入；切歌回写 played 时继承，不丢失）。 */
+  batch?: PathBatch
   /** 可播放的完整音乐信息（引擎透传；路径点击跳播用，无则不可跳播）。 */
   musicInfo?: LX.Music.MusicInfoOnline
 }
@@ -142,6 +154,8 @@ export const addRecommendedIds = (state: SessionState, ids: string[]): SessionSt
  * 追加/更新路径条目：同 id 或同曲（sameSong，同曲不同 id 变体）只保留一条
  * （planned 更新为 played 时位置不变，字段取后来传入的 item）；
  * 超出 MAX_PATH 裁掉最旧条目。无 id 且非同曲条目按追加处理。
+ * 批次继承：新 item 带 batch 用新值，否则继承既有条目的 batch
+ * （保证切歌回写 played 时批次快照不丢失）。
  */
 export const appendToPath = (state: SessionState, item: SessionPathItem): SessionState => {
   const index = state.path.findIndex(p =>
@@ -149,8 +163,9 @@ export const appendToPath = (state: SessionState, item: SessionPathItem): Sessio
   )
   let path: SessionPathItem[]
   if (index >= 0) {
+    const existing = state.path[index]
     path = state.path.slice()
-    path[index] = item
+    path[index] = { ...item, batch: item.batch ?? existing.batch }
   } else {
     path = [...state.path, item]
   }

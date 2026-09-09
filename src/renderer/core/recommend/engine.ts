@@ -43,6 +43,7 @@ import { recallCandidates } from './recall'
 import type { RecallAnchor, RecallCandidate } from './recall'
 import { filterExcludeTracks } from './candidatePool'
 import { sameSong } from './sameSong'
+import { passesInstrumentalGate, wantsInstrumental } from './vocalGate'
 
 /** AI 配置（仅运行时传入，不落盘）。 */
 export interface AiConfig {
@@ -475,14 +476,22 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
       : '候选全部被当前边界过滤掉了，可以把距离稍微打开一点。')
   }
 
-  // 5. 插入“稍后播放”队列（T-B2：续补模式追加队尾，不重排已计划的路径）
+  // 5. 器乐硬门（诉求 1 补漏）：用户要求纯音乐/器乐时，反向过滤人声候选。
+  //    T-B0（judgment）只处理 anchor 人声→压制器乐方向（transformationAllowed/vocalMismatch），
+  //    AI 排序对“有无歌词”的语义判定不可靠；此处以元数据器乐词或 AI 行 vocal 连续性低（<0.4）为准。
+  ranked = ranked.filter(t => passesInstrumentalGate(t, stateWords, t.continuity))
+  if (!ranked.length && wantsInstrumental(stateWords)) {
+    throw new Error('当前约束下没有找到器乐/纯音乐类的后续歌曲，可以尝试松开距离或换一种描述。')
+  }
+
+  // 6. 插入“稍后播放”队列（T-B2：续补模式追加队尾，不重排已计划的路径）
   addTempPlayList(ranked.map(t => ({
     listId: LIST_IDS.PLAY_LATER,
     musicInfo: t.musicInfo,
     isTop: options.appendMode !== 'bottom',
   })))
 
-  // 6. 返回视图
+  // 7. 返回视图
   return {
     engine,
     anchor: { artist: anchor.artist, title: anchor.title, album: anchor.album ?? '' },

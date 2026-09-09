@@ -28,7 +28,7 @@ import {
   updateInstruction as updateInstructionCore,
   updateRadius as updateRadiusCore,
 } from './session-core'
-import type { FeedbackKind, SessionAnchor, SessionPathItem, SessionState, SessionView } from './session-core'
+import type { FeedbackKind, PathBatch, SessionAnchor, SessionPathItem, SessionState, SessionView } from './session-core'
 
 /** 切歌后自动续补的防抖间隔（毫秒）。 */
 const REFILL_DEBOUNCE_MS = 1200
@@ -172,10 +172,14 @@ const buildExploreOptions = (mode: 'initial' | 'refill'): ExploreOptions | null 
   }
 }
 
-/** 应用一次计划结果：记录推荐 id、追加 planned 路径、缓存分析供续补复用。 */
-const applyResult = (result: ExploreResult): void => {
+/**
+ * 应用一次计划结果：记录推荐 id、追加 planned 路径、缓存分析供续补复用。
+ * batch 为计划发起时的筛选条件快照（半径/原样约束），引擎由 result 决定。
+ */
+const applyResult = (result: ExploreResult, batch: Pick<PathBatch, 'radius' | 'instruction'>): void => {
   const st = state.value
   if (!st) return
+  const pathBatch: PathBatch = { ...batch, engine: result.engine }
   let next = addRecommendedIds(st, result.candidates.map(c => c.id).filter((id): id is string => id != null))
   for (const c of result.candidates) {
     next = appendToPath(next, {
@@ -186,6 +190,7 @@ const applyResult = (result: ExploreResult): void => {
       reason: c.reason,
       journeyRole: c.journeyRole,
       state: 'planned',
+      batch: pathBatch,
       musicInfo: c.musicInfo,
     })
   }
@@ -215,6 +220,8 @@ const plan = async(mode: 'initial' | 'refill'): Promise<void> => {
   // 捕获发起时的代际：await 期间会话可能被结束/重启，结果只属于发起时的会话
   const e = epoch
   try {
+    // 批次快照取计划发起时的半径与原样约束（await 期间用户改距离/约束不影响本批次标注）
+    const stateAtPlan = state.value
     const options = buildExploreOptions(mode)
     if (!options) return
     const result = await exploreOnce(options)
@@ -223,7 +230,7 @@ const plan = async(mode: 'initial' | 'refill'): Promise<void> => {
       rollbackQueued(result)
       return
     }
-    applyResult(result)
+    applyResult(result, { radius: stateAtPlan.radius, instruction: stateAtPlan.instruction })
     refillRetry = 0
     refillState.value = 'idle'
   } catch (err) {
@@ -280,6 +287,8 @@ const handleMusicToggled = (): void => {
       reason: existing?.reason ?? '',
       journeyRole: existing?.journeyRole ?? 'open',
       state: 'played',
+      // 切歌回写时带回既有批次快照（appendToPath 也会兜底继承，双保险不丢分组）
+      batch: existing?.batch,
       // 已播条目可能已离开稍后播放队列，保留 musicInfo 供路径点击重新入队播放
       musicInfo: existing?.musicInfo,
     })

@@ -254,6 +254,48 @@ describe('appendToPath - 路径追加顺序', () => {
   })
 })
 
+describe('appendToPath - batch 快照继承/合并', () => {
+  const batch = { radius: 35, instruction: '更冷一点', engine: 'ai' as const }
+
+  it('新增条目携带 batch', () => {
+    // act
+    const state = appendToPath(create(), { ...plannedItem('r1', 'Adele', 'Hello'), batch })
+    // assert
+    expect(state.path[0].batch).toEqual(batch)
+  })
+
+  it('played 更新（不带 batch）继承既有条目的 batch', () => {
+    // arrange
+    let state = appendToPath(create(), { ...plannedItem('r1', 'Adele', 'Hello'), batch })
+    // act：切歌回写 played 不带 batch（旧行为不改动其他字段）
+    state = appendToPath(state, { ...plannedItem('r1', 'Adele', 'Hello'), state: 'played' })
+    // assert
+    expect(state.path[0].state).toBe('played')
+    expect(state.path[0].batch).toEqual(batch)
+  })
+
+  it('同曲合并时显式传入 batch 用新值（handleMusicToggled 语义，保留原批次）', () => {
+    // arrange
+    let state = appendToPath(create(), { ...plannedItem('r1', 'Adele', 'Hello'), batch })
+    // act：切歌回写 played 时把既有 batch 显式带回
+    state = appendToPath(state, { ...plannedItem('r1', 'Adele', 'Hello'), state: 'played', batch: state.path[0].batch })
+    // assert
+    expect(state.path[0].state).toBe('played')
+    expect(state.path[0].batch).toEqual(batch)
+  })
+
+  it('同曲合并时新 batch 覆盖既有 batch', () => {
+    // arrange
+    let state = appendToPath(create(), { ...plannedItem('r1', 'Adele', 'Hello'), batch })
+    const nextBatch = { radius: 20, instruction: '', engine: 'local' as const }
+    // act
+    state = appendToPath(state, { ...plannedItem('r1', 'Adele', 'Hello'), state: 'planned', batch: nextBatch })
+    // assert
+    expect(state.path).toHaveLength(1)
+    expect(state.path[0].batch).toEqual(nextBatch)
+  })
+})
+
 describe('buildReplanInstruction - 反馈拼接一句话', () => {
   it('positive 与 negative 都拼进续补指令（空格分隔，避免 negativeFromInstruction 粘词）', () => {
     // arrange

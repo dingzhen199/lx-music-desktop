@@ -39,7 +39,8 @@
           </div>
           <div :class="$style.row">
             <span :class="$style.label">{{ t('explore__instruction') }}</span>
-            <base-input :class="$style.input" :model-value="sessionView.instruction" :placeholder="t('explore__instruction_tip')" @update:model-value="handleInstructionChange" />
+            <base-input :class="$style.input" :model-value="instructionDraft" :placeholder="t('explore__instruction_tip')" @update:model-value="instructionDraft = $event" @submit="handleInstructionSend" />
+            <button :class="[$style.btn, $style.sendBtn]" @click="handleInstructionSend">{{ t('explore__instruction_send') }}</button>
           </div>
         </div>
 
@@ -62,20 +63,23 @@
         </div>
       </div>
 
-      <!-- 路径列表 -->
+      <!-- 路径列表（按计划批次分组展示，行结构不变） -->
       <div :class="$style.pathWrap">
         <div :class="$style.pathTitle">{{ t('explore__path') }}</div>
         <div v-if="!sessionView.path.length" :class="$style.pathEmpty">{{ t('explore__path_empty') }}</div>
-        <div v-for="item in pathItems" :key="item.key" :class="[$style.pathItem, { [$style.current]: item.isCurrent, [$style.played]: item.state === 'played', [$style.clickable]: item.id != null }]" @click="handlePathClick(item.id)">
-          <div :class="$style.pathIndex">{{ item.no }}</div>
-          <div :class="$style.pathMain">
-            <div :class="$style.pathName">
-              <span :class="$style.title">{{ item.title }}</span>
-              <span v-if="item.artist" :class="$style.artist"> - {{ item.artist }}</span>
+        <div v-for="batch in pathBatches" :key="batch.key" :class="$style.pathBatch">
+          <div :class="$style.batchHeader">{{ batch.header }}</div>
+          <div v-for="item in batch.items" :key="item.key" :class="[$style.pathItem, { [$style.current]: item.isCurrent, [$style.played]: item.state === 'played', [$style.clickable]: item.id != null }]" @click="handlePathClick(item.id)">
+            <div :class="$style.pathIndex">{{ item.no }}</div>
+            <div :class="$style.pathMain">
+              <div :class="$style.pathName">
+                <span :class="$style.title">{{ item.title }}</span>
+                <span v-if="item.artist" :class="$style.artist"> - {{ item.artist }}</span>
+              </div>
+              <div :class="$style.reason">{{ item.reason }}</div>
             </div>
-            <div :class="$style.reason">{{ item.reason }}</div>
+            <span :class="[$style.role, $style[`role_${item.journeyRole}`]]">{{ roleLabel(item.journeyRole) }}</span>
           </div>
-          <span :class="[$style.role, $style[`role_${item.journeyRole}`]]">{{ roleLabel(item.journeyRole) }}</span>
         </div>
       </div>
     </template>
@@ -101,19 +105,78 @@ import {
   startSession,
 } from '@renderer/core/recommend/session'
 import { debounce } from '@common/utils'
+import type { SessionPathItem } from '@renderer/core/recommend/session-core'
 
 const t = useI18n()
 
 const anchorPicError = ref(false)
+// 一句话约束草稿：受控本地值，点击“发送”/按 Enter 才提交（不再 debounce 自动重排）
+const instructionDraft = ref('')
 
 watch(() => sessionView.value.active, (active) => {
-  if (active) anchorPicError.value = false
+  if (!active) return
+  anchorPicError.value = false
+  // 会话（重）开始时草稿复位为会话当前约束（初始空串/重开）
+  instructionDraft.value = sessionView.value.instruction
+})
+
+// 约束被提交（setInstruction）后草稿与会话约束同步；打字过程中不被打断（其他视图更新不动草稿）
+watch(() => sessionView.value.instruction, (instruction) => {
+  if (sessionView.value.active) instructionDraft.value = instruction
 })
 
 const hasPlaying = computed(() => Boolean(playMusicInfo.musicInfo?.id))
 
 // 路径列表视图项：预计算序号与稳定 key，避免模板内模板字符串/索引运算（dev ts-loader 类型检查）
 const pathItems = computed(() => sessionView.value.path.map((item, i) => ({ ...item, no: i + 1, key: item.id ?? `path-${i}` })))
+
+// 注：类型别名引用 imported 类型而非本地 const（compileScript 会把顶层 type 提到 setup 之外）。
+type PathViewItem = SessionPathItem & { isCurrent: boolean, no: number, key: string }
+
+/** 批次条件快照 → 分组 key（连续相同的 batch 归一组的依据；无 batch 为 null）。 */
+const batchKeyOf = (item: PathViewItem): string | null => {
+  const b = item.batch
+  return b ? `${b.radius}|||${b.instruction}|||${b.engine}` : null
+}
+
+/** 组头文案：第 N 批 · 距离 {radius} · 约束 {instruction} · {engine}（约束空/无 batch 用“无”兜底）。 */
+const buildBatchHeader = (batch: PathViewItem['batch'], index: number): string => {
+  const engine = batch ? t(batch.engine === 'ai' ? 'explore__engine_ai' : 'explore__engine_local') : ''
+  return t('explore__path_batch_header', {
+    index,
+    radius: batch ? batch.radius : '—',
+    instruction: batch && String(batch.instruction ?? '').trim() ? batch.instruction : t('explore__path_batch_none'),
+    engine: engine || '—',
+  })
+}
+
+/**
+ * 路径分批：按计划批次连续分桶（连续相同条件并成一组）；
+ * 无 batch 的历史条目归入上一组（没有上一组则自成默认组）。
+ * 组头是额外元素，组内行结构（pathItem 及角色徽章父子关系）不变，不影响路径点击探针。
+ */
+const pathBatches = computed(() => {
+  const groups: Array<{ key: string, header: string, items: PathViewItem[] }> = []
+  let lastKey: string | null = null
+  for (const item of pathItems.value) {
+    const key = batchKeyOf(item)
+    if (key == null) {
+      if (groups.length) groups[groups.length - 1].items.push(item)
+      else groups.push({ key: '', header: '', items: [item] })
+      continue
+    }
+    if (key !== lastKey) {
+      groups.push({ key, header: '', items: [] })
+      lastKey = key
+    }
+    groups[groups.length - 1].items.push(item)
+  }
+  return groups.map((group, gi) => ({
+    ...group,
+    key: `${gi}-${group.key}`,
+    header: buildBatchHeader(group.items[0]?.batch, gi + 1),
+  }))
+})
 
 const distanceWords = computed(() => {
   const radius = sessionView.value.radius
@@ -162,9 +225,10 @@ const handleRadiusChange = debounce((value: number) => {
   setRadius(Number(value))
 }, 300)
 
-const handleInstructionChange = debounce((value: string) => {
-  setInstruction(value)
-}, 500)
+// 发送按钮 / 输入框 Enter：提交一句话约束（草稿受控本地值，不自动重排）
+const handleInstructionSend = () => {
+  setInstruction(instructionDraft.value)
+}
 </script>
 
 <style lang="less" module>
@@ -322,6 +386,9 @@ const handleInstructionChange = debounce((value: string) => {
     flex: auto;
     max-width: 300px;
   }
+  .sendBtn {
+    flex: none;
+  }
 }
 
 .status {
@@ -350,6 +417,15 @@ const handleInstructionChange = debounce((value: string) => {
   .pathEmpty {
     font-size: 12px;
     color: var(--color-font-label);
+  }
+}
+
+.pathBatch {
+  .batchHeader {
+    font-size: 12px;
+    color: var(--color-font-label);
+    margin: 10px 0 6px;
+    padding-left: 2px;
   }
 }
 
