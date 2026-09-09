@@ -45,6 +45,8 @@ export interface SessionPathItem {
   reason: string
   journeyRole: string
   state: PathState
+  /** 可播放的完整音乐信息（引擎透传；路径点击跳播用，无则不可跳播）。 */
+  musicInfo?: LX.Music.MusicInfoOnline
 }
 
 /** 会话状态（纯数据，转移函数返回新对象）。 */

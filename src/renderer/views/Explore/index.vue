@@ -49,6 +49,10 @@
           <span v-else-if="refillState === 'retrying'">{{ t('explore__retrying') }}</span>
           <span v-else-if="lastErrorText">{{ lastErrorKind === 'refill' ? t('explore__refill_failed') : t('explore__plan_failed') }}</span>
           <span v-else-if="lastResultEngine">{{ lastResultEngine === 'ai' ? t('explore__engine_ai') : t('explore__engine_local') }}</span>
+          <!-- 本地计划时展示 AI 排序失败原因，让失败可见 -->
+          <div v-if="lastResultEngine === 'local' && lastAiRankError" :class="$style.aiRankError">
+            {{ t('explore__ai_rank_failed') }}{{ truncateText(lastAiRankError, 200) }}
+          </div>
         </div>
 
         <!-- 反馈 -->
@@ -62,7 +66,7 @@
       <div :class="$style.pathWrap">
         <div :class="$style.pathTitle">{{ t('explore__path') }}</div>
         <div v-if="!sessionView.path.length" :class="$style.pathEmpty">{{ t('explore__path_empty') }}</div>
-        <div v-for="item in pathItems" :key="item.key" :class="[$style.pathItem, { [$style.current]: item.isCurrent, [$style.played]: item.state === 'played' }]">
+        <div v-for="item in pathItems" :key="item.key" :class="[$style.pathItem, { [$style.current]: item.isCurrent, [$style.played]: item.state === 'played', [$style.clickable]: item.id != null }]" @click="handlePathClick(item.id)">
           <div :class="$style.pathIndex">{{ item.no }}</div>
           <div :class="$style.pathMain">
             <div :class="$style.pathName">
@@ -85,9 +89,11 @@ import { playMusicInfo } from '@renderer/store/player/state'
 import {
   applyFeedback,
   endSession,
+  lastAiRankError,
   lastErrorKind,
   lastErrorText,
   lastResultEngine,
+  playPathItem,
   refillState,
   sessionView,
   setInstruction,
@@ -137,6 +143,15 @@ const handleStart = async() => {
 
 const handleEnd = () => {
   endSession()
+}
+
+const handlePathClick = (id: string | null) => {
+  playPathItem(id)
+}
+
+const truncateText = (text: string, max: number): string => {
+  const s = String(text ?? '')
+  return s.length > max ? `${s.slice(0, max)}…` : s
 }
 
 const handleFeedback = (kind: 'far' | 'good') => {
@@ -314,6 +329,10 @@ const handleInstructionChange = debounce((value: string) => {
   font-size: 12px;
   color: var(--color-font-label);
   min-height: 16px;
+  .aiRankError {
+    margin-top: 4px;
+    color: var(--color-badge-secondary);
+  }
 }
 
 .feedback {
@@ -348,6 +367,13 @@ const handleInstructionChange = debounce((value: string) => {
   }
   &.played {
     opacity: .75;
+  }
+  &.clickable {
+    cursor: pointer;
+    transition: background-color @transition-fast;
+    &:hover {
+      background-color: var(--color-primary-light-300-alpha-500);
+    }
   }
 }
 

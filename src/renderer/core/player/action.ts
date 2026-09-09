@@ -369,6 +369,19 @@ const handlePlayNext = (playMusicInfo: LX.Player.PlayMusicInfo) => {
   setPlayMusicInfo(playMusicInfo.listId, playMusicInfo.musicInfo, playMusicInfo.isTempPlay)
   handlePlay()
 }
+
+/**
+ * 立即播放指定歌曲（单曲即播，不清空稍后播放队列）。
+ * 与 playList/playListById 不同：它们会无条件 clearTempPlayeList()，
+ * 本函数保留稍后播放队列与当前列表，供探索路径点击跳播等场景使用。
+ * 注意必须走 handlePlay 的启动序列（setStop + setMusicUrl）：
+ * 仅 setPlayMusicInfo + play() 不会更换音频资源（play() 只会在音频为空时取 URL，
+ * 否则只是续播上一个加载的音频），用户会看着新标题继续听旧歌。
+ */
+export const playMusicInfoNow = (musicInfo: LX.Music.MusicInfo | LX.Download.ListItem, listId: string | null = null) => {
+  setPlayMusicInfo(listId, musicInfo)
+  handlePlay()
+}
 /**
  * 下一曲
  * @param isAutoToggle 是否自动切换

@@ -52,7 +52,7 @@ export default {
     },
   },
   emits: ['update:visible'],
-  setup() {
+  setup(props) {
     const lists = computed(() => userLists.filter(l => !!l.source && !!musicSdk[l.source]?.songList))
     const updateInfo = ref({})
     // const updateTimes = ref({})

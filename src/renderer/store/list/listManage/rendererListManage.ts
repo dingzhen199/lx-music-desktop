@@ -1,5 +1,6 @@
 import { toRaw } from '@common/utils/vueTools'
 import { rendererInvoke, rendererOff, rendererOn } from '@common/rendererIpc'
+import { unwrapMusicInfos } from './rawUnwrap'
 import { PLAYER_EVENT_NAME } from '@common/ipcNames'
 import {
   userListCreate,
@@ -78,6 +79,7 @@ export const getListMusics = async(listId: string | null): Promise<LX.Music.Musi
  * @param data
  */
 export const addListMusics = async(data: LX.List.ListActionMusicAdd) => {
+  data.musicInfos = unwrapMusicInfos(data.musicInfos)
   await rendererInvoke<LX.List.ListActionMusicAdd>(PLAYER_EVENT_NAME.list_music_add, data)
 }
 
@@ -86,6 +88,7 @@ export const addListMusics = async(data: LX.List.ListActionMusicAdd) => {
  * @param data
  */
 export const moveListMusics = async(data: LX.List.ListActionMusicMove) => {
+  data.musicInfos = unwrapMusicInfos(data.musicInfos)
   await rendererInvoke<LX.List.ListActionMusicMove>(PLAYER_EVENT_NAME.list_music_move, data)
 }
 

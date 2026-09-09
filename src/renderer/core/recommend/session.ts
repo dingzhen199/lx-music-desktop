@@ -11,6 +11,7 @@ import { computed, ref } from '@common/utils/vueTools'
 import { appSetting } from '@renderer/store/setting'
 import { playMusicInfo, tempPlayList } from '@renderer/store/player/state'
 import { removeTempPlayList } from '@renderer/store/player/action'
+import { playMusicInfoNow } from '@renderer/core/player'
 import { exploreOnce } from './engine'
 import type { AiConfig, ExploreAnchor, ExploreOptions, ExploreResult } from './engine'
 import type { RankPathInput, TrackAnalysis } from './prompts'
@@ -80,6 +81,15 @@ const outstandingRecommendedIds = (st: SessionState): string[] => {
   return out
 }
 
+/** 按 id 从稍后播放队列移除条目（从后往前删避免索引漂移）。 */
+const removeTempByIds = (ids: string[]): void => {
+  const set = new Set(ids.map(id => String(id)))
+  for (let i = tempPlayList.length - 1; i >= 0; i--) {
+    const id = tempPlayList[i]?.musicInfo?.id
+    if (id && set.has(String(id))) removeTempPlayList(i)
+  }
+}
+
 /** 页面视图（非会话时为 inactive 空视图，避免模板侧 null 判断）。 */
 export const sessionView = computed<SessionView>(() => {
   const st = state.value
@@ -104,6 +114,9 @@ export const lastErrorText = computed<string>(() => lastError.value ?? '')
 
 /** 最近一次计划的引擎（无结果为 null；供页面展示 AI/本地标识）。 */
 export const lastResultEngine = computed<'ai' | 'local' | null>(() => lastResult.value?.engine ?? null)
+
+/** 最近一次 AI 排序的失败文案（无错误为空串；供页面在本地计划时展示失败原因）。 */
+export const lastAiRankError = computed<string>(() => lastResult.value?.meta.aiRankError ?? '')
 
 /** AI 配置：未启用或未填 Key 时返回 undefined（引擎走本地排序回退，不报错）。 */
 const buildAiConfig = (): AiConfig | undefined => {
@@ -170,6 +183,7 @@ const applyResult = (result: ExploreResult): void => {
       reason: c.reason,
       journeyRole: c.journeyRole,
       state: 'planned',
+      musicInfo: c.musicInfo,
     })
   }
   state.value = next
@@ -262,6 +276,8 @@ const handleMusicToggled = (): void => {
       reason: existing?.reason ?? '',
       journeyRole: existing?.journeyRole ?? 'open',
       state: 'played',
+      // 已播条目可能已离开稍后播放队列，保留 musicInfo 供路径点击重新入队播放
+      musicInfo: existing?.musicInfo,
     })
   }
   if (!appSetting['recommend.autoRefill']) return
@@ -278,12 +294,22 @@ const subscribeMusicToggled = (): void => {
 
 /**
  * 开始会话：锚点取当前播放歌曲，按默认设置做初始计划（置顶入队）。
- * 会话进行中调用本函数不重启（幂等，供播放栏按钮直接跳转页面）。
+ * 幂等判定：会话存在且锚点仍是当前播放歌曲 → 不重启（供播放栏按钮直接跳转页面）；
+ * 锚点已不是当前歌（用户切歌后主动再点“从此歌出发”）→ 旧推荐不清掉的话仍留在队列
+ * 和新会话混在一起，故先移除旧会话入队的歌曲，再结束旧会话、按新歌重新开始。
+ * 只有用户显式点击本函数才会重开；切歌/自动续补等内部流程不经过它，不会误判重开。
  */
 export const startSession = async(): Promise<void> => {
   const play = currentMusic()
   if (!play) throw new Error('请先播放歌曲')
-  if (state.value) return
+  const st = state.value
+  if (st) {
+    // 锚点一致 → 幂等返回（用户点了播放栏按钮只是跳转页面，不打断当前会话）
+    if (st.anchor.id != null && String(play.id) === String(st.anchor.id)) return
+    // 锚点变化 → 重开会话：清掉旧会话的推荐残留（保留用户手动入队的歌曲）
+    removeTempByIds(st.recommendedIds)
+    endSession()
+  }
   lastError.value = null
   lastResult.value = null
   lastErrorKind.value = null
@@ -327,6 +353,33 @@ export const setInstruction = (instruction: string): void => {
   if (!st) return
   state.value = updateInstructionCore(st, instruction)
   scheduleRefill()
+}
+
+/**
+ * 播放路径条目（探索路径点击跳播）：
+ * - 稍后播放队列中仍有该 id → 先从队列移除再播放
+ *   （稍后播放为 FIFO（playNext 弹队首），不移除的话该歌播完会被弹队首再播一次；
+ *   严禁用 playList/playListById：它们会在切换列表时无条件调用 clearTempPlayeList()
+ *   清空稍后播放队列，故此处用 playMusicInfoNow）；
+ * - 队列中没有但路径条目带音乐信息 → 已被消费/已播，直接播放、不再入队；
+ * - 都没有 → 仅 console.warn。
+ */
+export const playPathItem = (id: string | null): void => {
+  const st = state.value
+  if (!st || id == null) return
+  const queued = tempPlayList.find(item => item?.musicInfo?.id === id)
+  if (queued?.musicInfo) {
+    const queueIndex = tempPlayList.indexOf(queued)
+    removeTempPlayList(queueIndex)
+    playMusicInfoNow(queued.musicInfo)
+    return
+  }
+  const pathItem = st.path.find(p => p.id === id)
+  if (pathItem?.musicInfo) {
+    playMusicInfoNow(pathItem.musicInfo)
+    return
+  }
+  console.warn('[session] 路径条目缺少可播放的音乐信息', id)
 }
 
 /** 结束会话：清空状态与订阅（停止路径追加与自动续补）。 */
