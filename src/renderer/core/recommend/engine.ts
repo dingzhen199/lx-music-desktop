@@ -42,6 +42,7 @@ import type { AnchorLike, RankCandidateInput, RankPathInput, TrackAnalysis } fro
 import { recallCandidates } from './recall'
 import type { RecallAnchor, RecallCandidate } from './recall'
 import { filterExcludeTracks } from './candidatePool'
+import { emptyResultMessage } from './hints'
 import { sameSong } from './sameSong'
 import { passesInstrumentalGate, wantsInstrumental } from './vocalGate'
 
@@ -438,9 +439,11 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
   // 防同曲不同 id 变体跨批次重复）。
   const pool = filterExcludeTracks(recall.items, options.excludeIds ?? [], options.excludeTracks ?? [])
   if (!pool.length) {
-    throw new Error(constraints.excludedLanguages?.length
-      ? '当前硬约束下没有找到可用候选。不会退回被你排除的音乐来凑数，请稍后重试。'
-      : '这次没有找到能加入播放队列的后续歌曲，请稍后重试，或把探索距离稍微打开一点。')
+    throw new Error(emptyResultMessage({
+      wantsInstrumental: wantsInstrumental(stateWords),
+      excludedLanguages: constraints.excludedLanguages,
+      stage: 'pool',
+    }))
   }
 
   // 4. 排序：LLM 优先（抛错时自动重试，全部失败才回退本地），AI 未配置直接本地
@@ -471,9 +474,12 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
     ranked = localRank(pool, anchor, radius, stateWords, activeExcludes, analysis, constraints)
   }
   if (!ranked.length) {
-    throw new Error(constraints.excludedLanguages?.length
-      ? '当前硬约束下没有足够可靠的后续歌曲，不会用不符合要求的歌凑数；可以换一种描述或稍后重试。'
-      : '候选全部被当前边界过滤掉了，可以把距离稍微打开一点。')
+    // 文案优先级：器乐诉求 → 语言硬约束 → 通用（hints.emptyResultMessage，两级空结果共用）
+    throw new Error(emptyResultMessage({
+      wantsInstrumental: wantsInstrumental(stateWords),
+      excludedLanguages: constraints.excludedLanguages,
+      stage: 'ranked',
+    }))
   }
 
   // 5. 器乐硬门（诉求 1 补漏）：用户要求纯音乐/器乐时，反向过滤人声候选。
@@ -481,7 +487,8 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
   //    AI 排序对“有无歌词”的语义判定不可靠；此处以元数据器乐词或 AI 行 vocal 连续性低（<0.4）为准。
   ranked = ranked.filter(t => passesInstrumentalGate(t, stateWords, t.continuity))
   if (!ranked.length && wantsInstrumental(stateWords)) {
-    throw new Error('当前约束下没有找到器乐/纯音乐类的后续歌曲，可以尝试松开距离或换一种描述。')
+    // 排序结果非空但被器乐硬门全部拦下：文案与“要求器乐 + 排序后为空”共用同一来源。
+    throw new Error(emptyResultMessage({ wantsInstrumental: true, excludedLanguages: constraints.excludedLanguages, stage: 'ranked' }))
   }
 
   // 6. 插入“稍后播放”队列（T-B2：续补模式追加队尾，不重排已计划的路径）

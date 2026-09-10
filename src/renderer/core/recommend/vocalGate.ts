@@ -15,8 +15,13 @@
  * 两侧词表/前缀规则各自独立演进。
  */
 
-/** 器乐信号在候选元数据中的匹配（title/artist/album/tags 联合文本小写）。 */
-const INSTRUMENTAL_META_RE = /(instrumental|纯音乐|伴奏|无人声|无歌词|纯乐器|轻音乐|pure music|inst\.)/i
+/**
+ * 器乐信号在候选元数据中的匹配（title/artist/album/tags 联合文本小写）。
+ * 注意：本表与 INSTRUMENTAL_TERMS 是**刻意不同的两套词表**——
+ * 本表是“曲目元数据里标注了器乐形态”的标记词，INSTRUMENTAL_TERMS 是“用户诉求句式”的目标词；
+ * 两者按各自场景独立演进（当前 `器乐` 两边都有，但不要假定会同步增删）。
+ */
+const INSTRUMENTAL_META_RE = /(instrumental|纯音乐|器乐|伴奏|无人声|无歌词|纯乐器|轻音乐|pure music|inst\.)/i
 
 /**
  * 器乐/无人声目标词：正面与负面**共用**同一常量，杜绝单边漏词漂移
@@ -32,12 +37,18 @@ const INSTRUMENTAL_TERMS = '纯音乐|器乐|instrumental|纯乐器|轻音乐|�
  * “无歌词/无人声/去掉人声”类目标词在带否定前缀时（“不要无歌词的”“不要去掉人声”）
  * 是“不要(无歌词)/不要(去掉人声)”= 要求人声/歌词，不是器乐诉求；裸诉求（“去掉人声”）
  * 无否定前缀，由 POSITIVE 命中为器乐诉求。
+ *
+ * 否定链的截断标点：句末/停顿类（，,。；;！？!?）与换行会截断——“不要华语！纯音乐”
+ * 是两句诉求（不要华语 + 要纯音乐）。**刻意不截断**：顿号 `、` 与冒号 `：/:`
+ * （“不要华语、纯音乐”“不要华语：纯音乐”是并列列举/补语，读作“不要华语和纯音乐”，
+ * 若在此截断会把否定诉求反转为器乐诉求）。
  */
-const NEGATIVE_INSTRUMENTAL_RE = new RegExp(`(?:不要|别|不想听|不想|不喜欢|不爱|讨厌|避免)[^，,。；;]{0,12}(?:${INSTRUMENTAL_TERMS})`, 'i')
+const NEGATIVE_INSTRUMENTAL_RE = new RegExp(`(?:不要|别|不想听|不想|不喜欢|不爱|讨厌|避免)[^，,。；;！？!?\\n\\r]{0,12}(?:${INSTRUMENTAL_TERMS})`, 'i')
 
 /**
  * 肯定命中：只管目标词出现（否定前缀已由 NEGATIVE 先行排除，
- * 句内标点会截断否定链，无需前导标点排除——“不要华语，纯音乐”“；纯音乐”都算要求器乐）。
+ * 句末/停顿标点（，。；！？!? 与换行）会截断否定链，无需前导标点排除——
+ * “不要华语，纯音乐”“不要华语！纯音乐”“；纯音乐”都算要求器乐）。
  * 额外包含 `不要人声`（见 INSTRUMENTAL_TERMS 注释：仅 POSITIVE 有意多出的词）。
  */
 const POSITIVE_INSTRUMENTAL_RE = new RegExp(`(?:${INSTRUMENTAL_TERMS})|不要人声`, 'i')

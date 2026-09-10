@@ -53,6 +53,31 @@ describe('wantsInstrumental - 是否要求纯音乐/器乐', () => {
     expect(wantsInstrumental('不要华语，纯音乐')).toBe(true)
   })
 
+  it('不要华语！纯音乐 → true（感叹号截断否定链）', () => {
+    // act & assert
+    expect(wantsInstrumental('不要华语！纯音乐')).toBe(true)
+  })
+
+  it('不要华语？纯音乐 → true（问号截断否定链）', () => {
+    // act & assert
+    expect(wantsInstrumental('不要华语？纯音乐')).toBe(true)
+  })
+
+  it('不要华语!纯音乐 → true（半角感叹号截断否定链）', () => {
+    // act & assert
+    expect(wantsInstrumental('不要华语!纯音乐')).toBe(true)
+  })
+
+  it('不要华语\\n纯音乐 → true（换行截断否定链）', () => {
+    // act & assert
+    expect(wantsInstrumental('不要华语\n纯音乐')).toBe(true)
+  })
+
+  it('不要华语、纯音乐 → false（顿号不截断否定链：并列列举读作“不要华语和纯音乐”，故意锁定）', () => {
+    // act & assert
+    expect(wantsInstrumental('不要华语、纯音乐')).toBe(false)
+  })
+
   it('；纯音乐 → true（前导无前缀直接命中）', () => {
     // act & assert
     expect(wantsInstrumental('让我静一静；纯音乐')).toBe(true)
@@ -138,6 +163,11 @@ describe('candidateIsInstrumental - 候选器乐信号', () => {
   it('标题含“无人声” → true', () => {
     // act & assert
     expect(candidateIsInstrumental({ title: '夜的序章（无人声）' })).toBe(true)
+  })
+
+  it('标题含“器乐”（器乐版）→ true（元数据词表与诉求词表对齐，无需 continuity）', () => {
+    // act & assert
+    expect(candidateIsInstrumental({ title: '夜曲（器乐版）' })).toBe(true)
   })
 
   it('continuity.vocal = 0.1 → true', () => {
