@@ -17,6 +17,8 @@ const LLM_TIMEOUT = 180_000
 const MAX_TOKENS = 384_000
 /** 模型/网关不支持大 max_tokens（4xx 报超限）时降档重试的保守值。 */
 const MIN_TOKENS = 8192
+/** max_tokens 报错文案关键词（超限/非法；网关措辞各有差异，命中任一即视为需降档）。 */
+const MAX_TOKENS_ERROR_HINTS = ['exceed', 'greater', 'larger', 'invalid', 'maximum', 'limit', 'less than', '过大', '超出', '无效', '超限']
 
 /** 协议默认服务地址。 */
 const DEFAULT_BASE_URLS: Record<RecommendLlmProtocol, string> = {
@@ -73,7 +75,7 @@ interface OpenAIChatChoice {
 /** 错误响应是否抱怨 max_tokens 超限/非法（需降档重试）。 */
 const isMaxTokensError = (err: Error): boolean => {
   const msg = (err?.message ?? '').toLowerCase()
-  return /max_tokens/.test(msg) && /exceed|greater|larger|invalid|maximum|limit|less than|过大|超出|无效|超限/.test(msg)
+  return msg.includes('max_tokens') && MAX_TOKENS_ERROR_HINTS.some(hint => msg.includes(hint))
 }
 
 const completeOpenAI = async(
