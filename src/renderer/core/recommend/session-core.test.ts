@@ -13,15 +13,17 @@ import {
   addRecommendedIds,
   appendToPath,
   applyFeedback,
+  batchKey,
   buildReplanInstruction,
   clampRadius,
   computeRefillNeed,
   createSession,
+  groupPathByBatch,
   toView,
   updateInstruction,
   updateRadius,
 } from './session-core'
-import type { SessionAnchor, SessionState } from './session-core'
+import type { PathBatch, SessionAnchor, SessionState } from './session-core'
 
 const anchor: SessionAnchor = {
   id: 'anchor-1',
@@ -293,6 +295,94 @@ describe('appendToPath - batch 快照继承/合并', () => {
     // assert
     expect(state.path).toHaveLength(1)
     expect(state.path[0].batch).toEqual(nextBatch)
+  })
+})
+
+describe('batchKey / groupPathByBatch - 路径批次分组', () => {
+  const batchA: PathBatch = { radius: 35, instruction: '更冷一点', engine: 'ai' }
+  const batchB: PathBatch = { radius: 20, instruction: '', engine: 'local' }
+
+  it('batchKey：同值批次 key 相同，异值 key 不同', () => {
+    // act & assert
+    expect(batchKey(batchA)).toBe(batchKey({ ...batchA }))
+    expect(batchKey(batchA)).not.toBe(batchKey(batchB))
+  })
+
+  it('batchKey：无批次（null/undefined）→ null', () => {
+    // act & assert
+    expect(batchKey(null)).toBeNull()
+    expect(batchKey(undefined)).toBeNull()
+  })
+
+  it('连续相同批次归一组，批次变化开新组（组内保持原顺序）', () => {
+    // act
+    const groups = groupPathByBatch([
+      { id: 'a1', batch: batchA },
+      { id: 'a2', batch: batchA },
+      { id: 'b1', batch: batchB },
+    ])
+    // assert
+    expect(groups.map(g => g.batch)).toEqual([batchA, batchB])
+    expect(groups[0].items.map(i => i.id)).toEqual(['a1', 'a2'])
+    expect(groups[1].items.map(i => i.id)).toEqual(['b1'])
+  })
+
+  it('非连续同批次值分成两组且 key 不同（v-for 唯一性）', () => {
+    // act
+    const groups = groupPathByBatch([
+      { id: 'a1', batch: batchA },
+      { id: 'b1', batch: batchB },
+      { id: 'a2', batch: batchA },
+    ])
+    // assert
+    expect(groups).toHaveLength(3)
+    expect(new Set(groups.map(g => g.key)).size).toBe(3)
+  })
+
+  it('无批次条目并入上一组（紧随其后的同批次条目仍归同组）', () => {
+    // act
+    const groups = groupPathByBatch([
+      { id: 'a1', batch: batchA },
+      { id: 'x1' },
+      { id: 'a2', batch: batchA },
+      { id: 'b1', batch: batchB },
+      { id: 'x2' },
+    ])
+    // assert
+    expect(groups).toHaveLength(2)
+    expect(groups[0].batch).toEqual(batchA)
+    expect(groups[0].items.map(i => i.id)).toEqual(['a1', 'x1', 'a2'])
+    expect(groups[1].items.map(i => i.id)).toEqual(['b1', 'x2'])
+  })
+
+  it('全部无批次 → 单个 batch:null 组（头部回落「—」组头）', () => {
+    // arrange：显式标注元素类型（全列表无 batch 时泛型推断回落到约束，裸字面量的 id 会被当作多余属性）
+    const items: Array<{ id: string, batch?: PathBatch }> = [{ id: 'x1' }, { id: 'x2' }]
+    // act
+    const groups = groupPathByBatch(items)
+    // assert
+    expect(groups).toHaveLength(1)
+    expect(groups[0].batch).toBeNull()
+    expect(groups[0].items.map(i => i.id)).toEqual(['x1', 'x2'])
+  })
+
+  it('头部无批次孤儿并入第一个批次组并保持原相对顺序', () => {
+    // act
+    const groups = groupPathByBatch([
+      { id: 'x1' },
+      { id: 'x2' },
+      { id: 'a1', batch: batchA },
+      { id: 'a2', batch: batchA },
+    ])
+    // assert
+    expect(groups).toHaveLength(1)
+    expect(groups[0].batch).toEqual(batchA)
+    expect(groups[0].items.map(i => i.id)).toEqual(['x1', 'x2', 'a1', 'a2'])
+  })
+
+  it('空列表 → 无分组', () => {
+    // act & assert
+    expect(groupPathByBatch([])).toEqual([])
   })
 })
 

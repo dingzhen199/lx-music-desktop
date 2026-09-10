@@ -105,7 +105,8 @@ import {
   startSession,
 } from '@renderer/core/recommend/session'
 import { debounce } from '@common/utils'
-import type { SessionPathItem } from '@renderer/core/recommend/session-core'
+import { groupPathByBatch } from '@renderer/core/recommend/session-core'
+import type { PathBatch, SessionPathItem } from '@renderer/core/recommend/session-core'
 
 const t = useI18n()
 
@@ -128,19 +129,13 @@ watch(() => sessionView.value.instruction, (instruction) => {
 const hasPlaying = computed(() => Boolean(playMusicInfo.musicInfo?.id))
 
 // 路径列表视图项：预计算序号与稳定 key，避免模板内模板字符串/索引运算（dev ts-loader 类型检查）
-const pathItems = computed(() => sessionView.value.path.map((item, i) => ({ ...item, no: i + 1, key: item.id ?? `path-${i}` })))
+const pathItems = computed<PathViewItem[]>(() => sessionView.value.path.map((item, i) => ({ ...item, no: i + 1, key: item.id ?? `path-${i}` })))
 
 // 注：类型别名引用 imported 类型而非本地 const（compileScript 会把顶层 type 提到 setup 之外）。
 type PathViewItem = SessionPathItem & { isCurrent: boolean, no: number, key: string }
 
-/** 批次条件快照 → 分组 key（连续相同的 batch 归一组的依据；无 batch 为 null）。 */
-const batchKeyOf = (item: PathViewItem): string | null => {
-  const b = item.batch
-  return b ? `${b.radius}|||${b.instruction}|||${b.engine}` : null
-}
-
 /** 组头文案：第 N 批 · 距离 {radius} · 约束 {instruction} · {engine}（约束空/无 batch 用“无”兜底）。 */
-const buildBatchHeader = (batch: PathViewItem['batch'], index: number): string => {
+const buildBatchHeader = (batch: PathBatch | null | undefined, index: number): string => {
   const engine = batch ? t(batch.engine === 'ai' ? 'explore__engine_ai' : 'explore__engine_local') : ''
   return t('explore__path_batch_header', {
     index,
@@ -151,41 +146,15 @@ const buildBatchHeader = (batch: PathViewItem['batch'], index: number): string =
 }
 
 /**
- * 路径分批：按计划批次连续分桶（连续相同条件并成一组）；
- * 无 batch 的历史条目归入其出现的“上一组”（跟随上一组头展示）；
- * 仅当全部条目都无 batch（整条路径都无批次）时才显示 '—' 默认组头——
- * 因此挂在路径头部、没有“上一组”可归的无 batch 条目会预并入第一个批次组。
+ * 路径分批：分组语义（连续同批次成组/无批次跟随上一组/头部孤儿并入首组/全无批次单组）
+ * 已下沉到 session-core.groupPathByBatch；视图只把分组映射成 i18n 组头文案。
  * 组头是额外元素，组内行结构（pathItem 及角色徽章父子关系）不变，不影响路径点击探针。
  */
 const pathBatches = computed(() => {
-  const groups: Array<{ key: string, header: string, items: PathViewItem[] }> = []
-  // 整条路径存在批次条目时禁止出现 '—' 默认组头：头部无上一组可归的无 batch 条目暂存后并入首个批次组
-  const anyBatch = pathItems.value.some(item => item.batch != null)
-  const leadingOrphans: PathViewItem[] = []
-  let lastKey: string | null = null
-  for (const item of pathItems.value) {
-    const key = batchKeyOf(item)
-    if (key == null) {
-      if (groups.length) groups[groups.length - 1].items.push(item)
-      else if (anyBatch) leadingOrphans.push(item)
-      else groups.push({ key: '', header: '', items: [item] })
-      continue
-    }
-    if (key !== lastKey) {
-      groups.push({ key, header: '', items: [] })
-      lastKey = key
-    }
-    groups[groups.length - 1].items.push(item)
-  }
-  if (leadingOrphans.length && groups.length) {
-    groups[0].items = [...leadingOrphans, ...groups[0].items]
-  }
-  return groups.map((group, gi) => ({
-    ...group,
-    key: `${gi}-${group.key}`,
-    // 组头取组内第一个有 batch 的条目（前插的孤儿无 batch，不能作组头依据）；
-    // 全组无 batch 时才回退 '—' 兜底。
-    header: buildBatchHeader(group.items.find(item => item.batch != null)?.batch, gi + 1),
+  return groupPathByBatch(pathItems.value).map((group, gi) => ({
+    key: group.key,
+    header: buildBatchHeader(group.batch, gi + 1),
+    items: group.items,
   }))
 })
 

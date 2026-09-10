@@ -10,7 +10,7 @@
 
 import { recallSourceLanguageBlocked } from './gates'
 import type { LanguageConstraints, TrackLike } from './judgment'
-import { normalizeTitle, sameSong } from './sameSong'
+import { includesSameSong, normalizeTitle, sameSong } from './sameSong'
 import type { SongRef } from './sameSong'
 
 /** 候选池构建选项。 */
@@ -61,7 +61,7 @@ export function buildCandidatePool<T extends TrackLike>(items: T[], options: Can
     if (sameSong(c, options.anchor)) continue
     if (isLoved(c, lovedIndex)) continue
     if (recallSourceLanguageBlocked(c, options.constraints)) continue
-    if (out.some(it => sameSong(it, c))) continue
+    if (includesSameSong(out, c)) continue
     if (id) seenIds.add(id)
     out.push(c)
   }
@@ -77,7 +77,7 @@ export function filterExcludeTracks<T extends TrackLike>(items: T[], excludeIds:
   return items.filter(c => {
     const id = String(c.encryptedId ?? '')
     if (id && ids.has(id)) return false
-    if ((excludeTracks ?? []).some(t => sameSong(t, c))) return false
+    if (includesSameSong(excludeTracks ?? [], c)) return false
     return true
   })
 }

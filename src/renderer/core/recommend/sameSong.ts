@@ -44,3 +44,21 @@ export const sameSong = (a: SongRef, b: SongRef): boolean => {
   if (!aTokens.length || !bTokens.length) return false
   return aTokens.some(t => bTokens.includes(t))
 }
+
+/**
+ * 列表内是否已存在同曲（sameSong 语义）。
+ * 候选池去重、跨批次排除、AI 分批保险、本地排序 seen 集合共用的“列表命中”语义。
+ */
+export const includesSameSong = (list: SongRef[], target: SongRef): boolean => {
+  return list.some(item => sameSong(item, target))
+}
+
+/**
+ * 同曲去重追加：列表中没有同曲时追加并返回 true，已有同曲返回 false（不追加）。
+ * 供“边过滤边记录已见曲目”的场景直接用（filter 谓词 / 逐条累积）。
+ */
+export const pushUniqueSameSong = (list: SongRef[], item: SongRef): boolean => {
+  if (includesSameSong(list, item)) return false
+  list.push(item)
+  return true
+}

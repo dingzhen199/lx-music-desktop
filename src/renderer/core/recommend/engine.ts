@@ -43,7 +43,8 @@ import { recallCandidates } from './recall'
 import type { RecallAnchor, RecallCandidate } from './recall'
 import { filterExcludeTracks } from './candidatePool'
 import { emptyResultMessage } from './hints'
-import { sameSong } from './sameSong'
+import { includesSameSong, pushUniqueSameSong } from './sameSong'
+import type { SongRef } from './sameSong'
 import { passesInstrumentalGate, wantsInstrumental } from './vocalGate'
 
 /** AI 配置（仅运行时传入，不落盘）。 */
@@ -81,7 +82,7 @@ export interface ExploreOptions {
   /** 已推荐过的候选 id（续补时避免重复入队）。 */
   excludeIds?: string[]
   /** 跨批次排除已推荐/已播曲目（artist/title，按 sameSong 防同曲不同 id 变体重复入队）。 */
-  excludeTracks?: Array<{ artist?: string, title?: string }>
+  excludeTracks?: SongRef[]
   /** 最近路径（已播/已计划，供 AI 排序提示词延续弧线）。 */
   recentPath?: RankPathInput[]
 }
@@ -277,7 +278,7 @@ const aiRank = async(
       if (!track || pickedIds.has(String(track.encryptedId))) continue
       // 同曲不同 id 变体批内保险：多批次 merge 后仍可能残留同曲（候选池已按 sameSong 去重，
       // 此处兜底防 LLM 分批产物里不同 id 的同曲变体）。
-      if (picked.some(it => sameSong(it, track))) continue
+      if (includesSameSong(picked, track)) continue
       if (rowLanguageBlocked(row, track, constraints)) continue
       if (!eligibleByFormat(track, analysis, stateWords, excludes) || exclusionHit(track, excludes)) continue
       if (rankingWorldBreak(row, radius)) continue
@@ -321,9 +322,10 @@ const aiRank = async(
 // ============================ 本地回退排序（from-here localRank 语义简化） ============================
 
 /**
- * 确定性本地排序：taste 弱偏好（liked+6/同艺人近距+8/semantic+10/playlist+2）、
+ * 确定性本地排序：taste 弱偏好（同艺人+8/semantic+10/playlist+2、最近播放+1）、
  * 超半径过滤、T-B0 守门（eligibleByFormat/coarseWorldBreak/exclusionHit/localLanguageBlocked），
  * 最后经 composeListeningArc + diversify 收敛。
+ * 无红心加分：红心歌已在候选池（candidatePool 红心排除）硬排除，候选侧 liked 恒 false。
  */
 const localRank = (
   pool: RecallCandidate[],
@@ -344,22 +346,15 @@ const localRank = (
       if (Number(t.distance) > Number(radius)) return false
       return true
     })
-    .filter(t => {
-      // 同曲不同 id 变体保险：候选池已按 sameSong 去重，此处兜底防不同批次混入的同曲变体。
-      if (seenTracks.some(it => sameSong(it, t))) return false
-      seenTracks.push(t)
-      return true
-    })
+    // 同曲不同 id 变体保险：候选池已按 sameSong 去重，此处兜底防不同批次混入的同曲变体。
+    .filter(t => pushUniqueSameSong(seenTracks, t))
     .map((t, i) => {
-      // liked/source==='liked' 加分：红心候选已在召回层（candidatePool 红心排除）硬排除，
-      // 幸存候选仅剩 title 变体等边缘情形（如 (Live) 版本），分支保留供未来弱偏好排序复用。
+      // 基础分 + 来源弱偏好 + 最近播放微调；红心歌已在候选池硬排除，此排序无红心加分。
       let score = 100 - Number(t.distance) * 0.7
-      if (t.source === 'liked') score += 6
-      else if (t.source === 'same-artist') score += 8
+      if (t.source === 'same-artist') score += 8
       else if (t.source === 'semantic-search') score += 10
       else if (t.source === 'playlist') score += 2
-      if (t.liked) score += 3
-      else if (t.recent) score += 1
+      if (t.recent) score += 1
       score += (i % 5) * 0.17
       return { ...t, aiScore: Math.max(0, Math.min(100, score)) }
     })
@@ -431,7 +426,7 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
     analysis = fallbackAnalysis(anchor)
   }
 
-  // 3. 跨源召回（语义关键词 + 同艺人 + 本地收藏歌单；「我喜欢」仅用于红心排除与计数展示）
+  // 3. 跨源召回（语义关键词 + 同艺人 + 本地收藏歌单；「我喜欢」仅用于红心排除）
   const recall = await recallCandidates(recallAnchor, analysis, radius, {
     excludedLanguages: constraints.excludedLanguages,
   })

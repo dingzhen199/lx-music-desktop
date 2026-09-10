@@ -6,7 +6,7 @@
  * - 语义关键词跨源搜索（复用 T-B0 recallQueries，每关键词每源限 10 首）；
  * - 本地用户收藏歌单（source=playlist）作候选池补充；
  * - 过滤 anchor 自身与无 id（不可播放类）的条目，归一化为 TrackLike；
- * - 「我喜欢」列表不再作为候选源（见 candidatePool 红心排除），仅参与候选标记展示。
+ * - 「我喜欢」列表不再作为候选源（见 candidatePool 红心排除），仅用于红心排除。
  */
 
 import { getListMusics } from '@renderer/store/list/listManage/rendererListManage'
@@ -99,7 +99,7 @@ const distanceFor = (kind: RecallQuery['kind'], semanticIndex: number): number =
 /**
  * 归一化候选为 TrackLike（source 为召回来源标记）。
  * loveIds：红心歌已在候选池（buildCandidatePool 红心排除）硬排除，
- * 此处仅保留 liked 标记计算（恒 false），供未来弱偏好/展示复用。
+ * liked 标记实际恒为 false；保留该字段仅因 prompts.ts 的 Familiarity 字段读取它（prompts.ts 只读）。
  */
 const toCandidate = (info: LX.Music.MusicInfo, source: string, extra: {
   distance: number
@@ -181,7 +181,7 @@ export const recallCandidates = async(
   const constraints: LanguageConstraints = { excludedLanguages: options.excludedLanguages ?? [] }
 
   // 本地池：用户收藏歌单（playlist，LOCAL_POOL_CAP 截断）；
-  // 「我喜欢」列表仅用于红心排除与计数展示，不再作为候选源（全量读取，截断会让 >200 首的红心曲漏排）。
+  // 「我喜欢」列表仅用于红心排除，不再作为候选源（全量读取，截断会让 >200 首的红心曲漏排）。
   const LOCAL_POOL_CAP = 200
   const loveIds = new Set<string>()
   const recentIds = new Set<string>()
@@ -207,7 +207,6 @@ export const recallCandidates = async(
       errors.push(`playlist:${list.id}: ${(err as Error).message}`)
     }
   }
-  sourceCounts.liked = likedItems.length
   sourceCounts.playlist = playlistItems.length
 
   // 语言硬约束：同艺人搜索与 anchor 冲突时换道（语义上不跨语言空间的召回方向）。
@@ -247,7 +246,6 @@ export const recallCandidates = async(
 
   sourceCounts['semantic-search'] = items.filter(c => c.source === 'semantic-search').length
   sourceCounts['same-artist'] = items.filter(c => c.source === 'same-artist').length
-  // liked 保留「我喜欢」列表条数（展示用；不再作为候选源，候选侧恒 0，此处不覆盖）
   sourceCounts.playlist = items.filter(c => c.source === 'playlist').length
 
   return { items, meta: { sourceCounts, error: errors.length ? errors.join('；') : null } }

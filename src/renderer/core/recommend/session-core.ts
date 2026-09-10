@@ -158,6 +158,7 @@ export const addRecommendedIds = (state: SessionState, ids: string[]): SessionSt
  * （保证切歌回写 played 时批次快照不丢失）。
  */
 export const appendToPath = (state: SessionState, item: SessionPathItem): SessionState => {
+  // 此处是 id 或同曲命中的“查找既有条目下标”语义（命中要原位更新），与 includesSameSong 的纯存在性判断不同，不复用。
   const index = state.path.findIndex(p =>
     (item.id != null && p.id === item.id) || sameSong(p, item),
   )
@@ -171,6 +172,56 @@ export const appendToPath = (state: SessionState, item: SessionPathItem): Sessio
   }
   if (path.length > MAX_PATH) path = path.slice(path.length - MAX_PATH)
   return { ...state, path }
+}
+
+/**
+ * 批次身份 key：由批次快照三元组（radius/instruction/engine）派生，
+ * 兼作路径分组的连续判定与视图 v-for 的稳定 key；无批次为 null。
+ */
+export const batchKey = (batch?: PathBatch | null): string | null => {
+  if (!batch) return null
+  return `${batch.radius}|||${batch.instruction}|||${batch.engine}`
+}
+
+/** 路径批次分组结果：batch 为该组的批次快照（全列表无批次时为 null）。 */
+export interface PathBatchGroup<T> {
+  /** v-for 稳定 key（含组序号，非连续的同批次值也不会撞 key）。 */
+  key: string
+  batch: PathBatch | null
+  items: T[]
+}
+
+/**
+ * 路径按批次分组（视图只负责 i18n 组头文案）：
+ * - 连续相同 batchKey 的条目并为一组，批次变化开新组；
+ * - 无 batch 条目并入上一组（组内保持原相对顺序）；
+ * - 整条列表都无 batch 时输出单个 batch:null 组（视图组头回落「—」）；
+ * - 头部无 batch 孤儿（其后存在批次）并入第一个批次组，仍在最前。
+ * 空列表返回空数组。
+ */
+export const groupPathByBatch = <T extends { batch?: PathBatch }>(items: T[]): Array<PathBatchGroup<T>> => {
+  const groups: Array<PathBatchGroup<T>> = []
+  const leadingOrphans: T[] = []
+  const anyBatch = items.some(item => item.batch != null)
+  let lastKey: string | null = null
+  for (const item of items) {
+    const key = batchKey(item.batch)
+    if (key == null) {
+      if (groups.length) groups[groups.length - 1].items.push(item)
+      else if (anyBatch) leadingOrphans.push(item)
+      else groups.push({ key: '', batch: null, items: [item] })
+      continue
+    }
+    if (key !== lastKey) {
+      groups.push({ key: '', batch: item.batch ?? null, items: [] })
+      lastKey = key
+    }
+    groups[groups.length - 1].items.push(item)
+  }
+  if (leadingOrphans.length && groups.length) {
+    groups[0].items = [...leadingOrphans, ...groups[0].items]
+  }
+  return groups.map((group, gi) => ({ ...group, key: `${gi}-${batchKey(group.batch) ?? ''}` }))
 }
 
 /**
