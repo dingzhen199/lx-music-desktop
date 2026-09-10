@@ -78,6 +78,26 @@ describe('wantsInstrumental - 是否要求纯音乐/器乐', () => {
     expect(wantsInstrumental('不要华语、纯音乐')).toBe(false)
   })
 
+  it('不要华语?纯音乐 → true（半角问号截断否定链）', () => {
+    // act & assert
+    expect(wantsInstrumental('不要华语?纯音乐')).toBe(true)
+  })
+
+  it('不要华语\\r纯音乐 → true（回车截断否定链）', () => {
+    // act & assert
+    expect(wantsInstrumental('不要华语\r纯音乐')).toBe(true)
+  })
+
+  it('不要华语：纯音乐 → false（全角冒号不截断否定链，补语读法，故意锁定）', () => {
+    // act & assert
+    expect(wantsInstrumental('不要华语：纯音乐')).toBe(false)
+  })
+
+  it('不要华语:纯音乐 → false（半角冒号不截断否定链，补语读法，故意锁定）', () => {
+    // act & assert
+    expect(wantsInstrumental('不要华语:纯音乐')).toBe(false)
+  })
+
   it('；纯音乐 → true（前导无前缀直接命中）', () => {
     // act & assert
     expect(wantsInstrumental('让我静一静；纯音乐')).toBe(true)
