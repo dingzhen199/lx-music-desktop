@@ -40,3 +40,13 @@ node e2e/smoke.js  # 仅冒烟：启动+页面文本+错误采集
 
 任一信号 + 标题命中即判“机制正常”；限流导致资源未加载属于外部因素。
 
+## 同曲规则独立副本（sameSongRules.js）
+
+`deep.js` D3c（路径无重复曲目）用 `pathProbe.sameSongText` 两两比对路径行。该实现与
+`src/renderer/core/recommend/sameSong.ts` 是**两份物理独立的同规则实现**：oracle 若直接复用
+被测实现，实现本身出错时会连 oracle 一起错、发现不了问题，因此 `e2e/sameSongRules.js` 刻意不复用 src。
+
+漂移由 `e2e/sameSongRules.test.js` 兜底（`npm test` 自动收集）：用共享语料逐例比对两侧判定——
+真实 artist 顺序/合作者变体、全部分隔符、大小写与空白差异、空艺人、`(Live)` 版本、同名异曲。
+**改动任一侧的同曲规则后必须跑 `npm test`，不一致会直接红。**
+
