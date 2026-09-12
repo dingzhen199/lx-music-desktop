@@ -316,7 +316,7 @@ const aiRank = async(
   // 跨批合并为全局序列：score 同标尺，按降序排；相同 score 保持批内顺序（稳定排序）
   picked.sort((a, b) => (Number(b.aiScore) || 0) - (Number(a.aiScore) || 0))
   const arc = composeListeningArc(picked, anchor, radius, 8)
-  return diversify(arc, anchor, 8) as RecallCandidate[]
+  return diversify(arc, anchor, 8, radius) as RecallCandidate[]
 }
 
 // ============================ 本地回退排序（from-here localRank 语义简化） ============================
@@ -361,7 +361,7 @@ const localRank = (
     .sort((a, b) => Number(b.aiScore) - Number(a.aiScore))
   if (!items.length) return []
   const arc = composeListeningArc(items, anchor, radius, 8)
-  return diversify(arc, anchor, 8) as RecallCandidate[]
+  return diversify(arc, anchor, 8, radius) as RecallCandidate[]
 }
 
 // ============================ exploreOnce ============================
