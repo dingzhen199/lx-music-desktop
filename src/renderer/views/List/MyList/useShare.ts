@@ -79,6 +79,9 @@ export default () => {
                   source: (listData as LX.List.UserListInfo).source,
                   sourceListId: (listData as LX.List.UserListInfo).sourceListId,
                   locationUpdateTime: (targetList as LX.List.UserListInfo).locationUpdateTime,
+                  cover: (listData as LX.List.UserListInfo).cover,
+                  desc: (listData as LX.List.UserListInfo).desc,
+                  author: (listData as LX.List.UserListInfo).author,
                 },
               ])
               break
@@ -97,6 +100,9 @@ export default () => {
         id: listData.id,
         source: (listData as LX.List.UserListInfo).source,
         sourceListId: (listData as LX.List.UserListInfo).sourceListId,
+        cover: (listData as LX.List.UserListInfo).cover,
+        desc: (listData as LX.List.UserListInfo).desc,
+        author: (listData as LX.List.UserListInfo).author,
       })
       void addListMusics(listData.id, listData.list.map(m => fixNewMusicInfoQuality(m)))
     })
