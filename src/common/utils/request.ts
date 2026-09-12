@@ -205,7 +205,8 @@ const buildRequestBody = (options: Options) => {
   return [finalHeaders, body] as const
 }
 
-const buildRequestDispatcher = (options: Options) => {
+// 导出以便单测锁定「仅传 retryNum 也构建独立 dispatcher」的分支行为
+export const buildRequestDispatcher = (options: Options) => {
   let dispatcher: Dispatcher.ComposedDispatcher | undefined
 
   if (options.maxRedirect != null) {
@@ -216,6 +217,9 @@ const buildRequestDispatcher = (options: Options) => {
         dispatcher = buildDispatcher(null, options.retryNum)
       }
     }
+  } else if (options.retryNum != null) {
+    // 仅传 retryNum 时也构建独立 dispatcher（沿用默认重定向），否则 retryNum 会被全局重试拦截器静默忽略
+    dispatcher = buildDispatcher(redirectDispatcher, options.retryNum)
   }
   return dispatcher
 }
