@@ -128,7 +128,6 @@ export const setListUpdateError = async(id: string, error: string | null) => {
   await initListUpdateInfo()
   const targetInfo = getOrCreateListUpdateInfo(id)
   targetInfo.updateError = error
-  targetInfo.updateErrorAt = error == null ? null : Date.now()
   listUpdateInfo[id] = targetInfo
   saveListUpdateInfo()
 }
