@@ -14,6 +14,7 @@ import { removeTempPlayList } from '@renderer/store/player/action'
 import { playMusicInfoNow } from '@renderer/core/player'
 import { exploreOnce } from './engine'
 import type { AiConfig, ExploreAnchor, ExploreOptions, ExploreResult } from './engine'
+import { startFeatureCollection, stopFeatureCollection } from './feature'
 import { sameSong } from './sameSong'
 import type { RankPathInput, TrackAnalysis } from './prompts'
 import {
@@ -338,6 +339,8 @@ export const startSession = async(): Promise<void> => {
   }
   state.value = createSession(anchor, { radius: appSetting['recommend.radius'] })
   subscribeMusicToggled()
+  // 随会话生命周期启动特征采集：让特征桶在会话播放中持续积累（此前仅 dev 钩子可达，生产路径从未启动）
+  startFeatureCollection()
   // 初始计划失败时保留会话与错误信息：用户可调整距离/约束（会触发续补重试）或直接结束
   await plan('initial')
 }
@@ -407,6 +410,7 @@ export const endSession = (): void => {
   }
   unsubMusicToggled?.()
   unsubMusicToggled = null
+  stopFeatureCollection()
   // 代际自增：使在途计划完成时识别为旧会话并回滚，不污染新会话
   epoch++
   state.value = null
