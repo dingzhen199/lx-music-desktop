@@ -16,7 +16,8 @@ export const addSongListDetail = async(id: string, source: LX.OnlineSource, name
   // 在 await 之前快照详情页元数据，避免等待期间详情页被切换导致读到其它歌单的封面/简介/作者
   const info = { ...listDetailInfo.info }
   const listId = getListId(id, source)
-  const targetList = userLists.find(l => l.sourceListId == listId)
+  // sourceListId 落库的是原始歌单 id（见下方 createUserList），按原始 id + 音源匹配已收藏列表；上游 b8287acf 起曾误用带前缀的 listId 比较导致去重永不可达
+  const targetList = userLists.find(l => l.sourceListId == id && l.source == source)
   if (targetList) {
     const confirm = await dialog.confirm({
       message: window.i18n.t('duplicate_list_tip', { name: targetList.name }),
