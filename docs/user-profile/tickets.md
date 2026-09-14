@@ -80,3 +80,9 @@ TP-6 blocked by TP-3 + TP-4 + TP-5（收尾）
   - 纯逻辑（profile-core.ts）：`reduceProfileSignal` 增 love 幂等——同曲（artist+title，sameSong 口径，与 id 无关）的 love 已存在于 ≤500 滚动事件缓冲时不动作（返回原状态引用：总计数/艺人计数/事件均不增）；complete/skip 不受限（重复听完/跳过是合法的重复证据）；旧 love 被 FIFO 淘汰出窗口后再收藏恢复计入。该幂等同时兜底重复收藏与取消后再收藏（D13 口径补充：窗口内不重复计）。
 - 测试：profile-core.test.ts 新增 5 例（重复同曲幂等、变体写法幂等、不同歌正常计入、FIFO 窗口恢复计入、complete/skip 不受限）；既有 49 例零断言调整。
 - 文档：spec.md D10 行与边界收藏捕获点条已同步补充两层口径。
+
+**TP-6 验证记录（2026-09-14）：**
+- `e2e/radio.js` 两次全量实跑 12/12 PASS（第二次在 listManage 修复后，覆盖 R11"重启页面无脚本错误"异常面）。
+- `e2e/ai.js` 未执行：`e2e/README.md` 已声明其 T-B1/T-B2 断言过时不可作回归依据（适配单独立项）；本分支 `e2e/` 目录零改动（mockLlm 面未触碰，`git diff d0368787..HEAD -- e2e/` 为空）。
+- 画像集成冒烟（一次性脚本，未提交）：生产构建 + 临时 profile：`player_music_love` 快捷键收藏播放中歌曲两次 → `data.json` 的 `recommendProfile` = loves 1（重复收藏幂等生效）、artistCounts 含该艺人 love+1、events 恰一条 love、summary 未达阈值矜持 null；全程无页面脚本错误。
+- `docs/explore-radio/spec.md` D4/非目标注记、ADR 0001 superseded 指针均已补齐。
