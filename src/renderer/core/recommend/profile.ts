@@ -7,17 +7,21 @@
  * 切歌结算听完信号（isCompleteListen，时长快照锚定 playerLoadeddata——切歌点 maxPlayTime
  * 恒已被清零，不可作快照点，D9）、onProfileSignal 信号广播注册表（session 侧背书订阅，D11）、
  * recordRecommendedSkip 主动入口（推荐曲 <30s 跳过由 session 结算后回注，TP-3 接线）、
- * 画像落盘（data.ts recommendProfile 读写对，启动水合一次、事件直写不节流，量级小，D8）。
+ * 画像落盘（data.ts recommendProfile 读写对，启动水合一次、事件直写不节流，量级小，D8）、
+ * LLM 增量摘要（TP-5/D7：summaryDue 命中且启用 AI 且有 Key 时 fire-and-forget 重写，在途单飞、失败保旧）。
  * 判定与计数口径全部在 profile-core（纯函数，vitest 覆盖）；本文件不 import session（D11 单向依赖），
  * 全部事件处理器经 safeHandle 兜底不外抛（e2e“无脚本错误”断言直接暴露此面，B7-m6）。
  * 属于集成层：验证方式为 tsc/lint/全量构建 + dev hook 冒烟（spec Test Seams）。
  */
 import { isPlay, playMusicInfo } from '@renderer/store/player/state'
 import { playProgress } from '@renderer/store/player/playProgress'
+import { appSetting } from '@renderer/store/setting'
 import { getRecommendProfile, saveRecommendProfile } from '@renderer/utils/data'
+import type { RecommendLlmProtocol } from '@common/recommendation'
+import { llmComplete } from './llm'
 import { accumulatePlayTime, createPlayTimeState, readPlayedMs } from './session-core'
 import type { PlayTimeState } from './session-core'
-import { hydrateProfile, isCompleteListen, reduceProfileSignal } from './profile-core'
+import { SUMMARY_MAX_CHARS, buildSummaryPrompt, hydrateProfile, isCompleteListen, reduceProfileSignal, summaryDue } from './profile-core'
 import type { ProfileSignal, ProfileState } from './profile-core'
 
 /** 画像状态（水合后常驻内存、每次有效信号后直写落盘；null = 尚未水合）。 */
@@ -66,6 +70,60 @@ const emitSignal = (signal: ProfileSignal): void => {
   profileState = next
   saveRecommendProfile(next)
   broadcastSignal(signal)
+  // TP-5（D7）：每次正向信号归并落盘后检查一次摘要重写；skip 不构成正向增量，不查
+  if (signal.kind === 'love' || signal.kind === 'complete') maybeRewriteSummary()
+}
+
+/** 当前画像状态只读出口（TP-4 供 session 侧 profileBoost 闭包实时读取/透传摘要；活引用，只读消费勿原地改）。 */
+export const getProfileState = (): ProfileState | null => profileState
+
+// ===== TP-5 LLM 增量摘要（D7）=====
+/** AI 配置（与 session.ts buildAiConfig 同口径的独立副本——本模块不 import session，D11；未启用返回 undefined）。 */
+const buildAiConfig = (): { protocol?: RecommendLlmProtocol, baseUrl?: string, apiKey: string, model: string } | undefined => {
+  if (!appSetting['ai.enable']) return undefined
+  return {
+    protocol: appSetting['ai.provider'],
+    baseUrl: appSetting['ai.baseUrl'],
+    apiKey: appSetting['ai.apiKey'],
+    model: appSetting['ai.model'],
+  }
+}
+
+// 在途单飞标记放在对象属性上（eslint require-atomic-updates 配置 allowProperties: true，先例 session.ts refillFlight）
+const summaryFlight = { inFlight: false }
+
+/**
+ * LLM 增量摘要重写（D7）：summaryDue 命中（loves+completes 相对 basedOnCount 增量 ≥20）且启用 AI 且有 Key 时
+ * fire-and-forget 重写一次；在途单飞（B7-m2，参照 session.ts refillFlight 先例）；输入 = profile-core
+ * buildSummaryPrompt（Top50 艺人计数 + 近 100 条事件）；失败 console.warn 落证并保留旧摘要（basedOnCount 不前移，
+ * 下轮正向信号仍会触发重写）；成功落盘摘要文本（D12：落盘前 ≤200 字截断）+ basedOnCount = 成功点的 loves+completes。
+ */
+const maybeRewriteSummary = (): void => {
+  const st = profileState
+  if (st == null || summaryFlight.inFlight || !summaryDue(st)) return
+  const ai = buildAiConfig()
+  // 无 Key 不发起调用（D7：零成本路径）
+  if (!ai?.apiKey) return
+  summaryFlight.inFlight = true
+  void llmComplete({
+    protocol: ai.protocol,
+    baseUrl: ai.baseUrl,
+    apiKey: ai.apiKey,
+    model: ai.model,
+    messages: buildSummaryPrompt(st),
+  }).then(result => {
+    const text = String(result?.content ?? '').trim()
+    const cur = profileState
+    if (text && cur != null) {
+      // 成功后落盘（D7）：basedOnCount 取成功点的当前计数——在途期间新到的正向信号自然包含进增量口径
+      profileState = { ...cur, summary: { text: text.slice(0, SUMMARY_MAX_CHARS), basedOnCount: cur.loves + cur.completes } }
+      saveRecommendProfile(profileState)
+    }
+  }).catch((err: unknown) => {
+    console.warn('[profile] 摘要重写失败，保留旧摘要', (err as Error).message)
+  }).finally(() => {
+    summaryFlight.inFlight = false
+  })
 }
 
 /** 启动水合一次：快照宽松归一后，水合前缓冲的信号在旧值上续归并（AC6：重启后计数在旧值上续增）。 */

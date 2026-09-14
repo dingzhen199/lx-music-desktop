@@ -88,6 +88,12 @@ export interface ExploreOptions {
   excludeTracks?: SongRef[]
   /** 最近路径（已播/已计划，供 AI 排序提示词延续弧线）。 */
   recentPath?: RankPathInput[]
+  /** 本地用户画像的艺人排序加成（TP-4/D3）：localRank 打分叠加后照常 clamp 到 [0,100]；缺省不加。 */
+  profileBoost?: (artist: string) => number
+  /** 用户长期画像摘要（TP-4/D6 独立通道）：仅在 aiRank 内拼入排序提示词文本；
+   * 绝不进入 stateWords/instruction（它们会被 effectiveExcludes/parseSessionConstraints/wantsInstrumental 等
+   * 机器解析面消费，摘要散文里的体裁词会翻转器乐硬门等守门行为，B7-R3）；无摘要不传。 */
+  profileSummary?: string
 }
 
 /** 对外返回的单条候选视图。 */
@@ -242,12 +248,16 @@ const aiRank = async(
   analysis: TrackAnalysis,
   constraints: LanguageConstraints,
   recentPath: RankPathInput[] = [],
+  profileSummary?: string,
 ): Promise<RecallCandidate[]> => {
   const eligible = pool.filter(t => eligibleByFormat(t, analysis, stateWords, excludes) && !exclusionHit(t, excludes))
   const candidates = eligible.slice(0, 48)
   if (!candidates.length) return []
 
-  const instruction = [stateWords, excludes ? `不要：${excludes}` : '', constraintPrompt(constraints)].filter(Boolean).join('；')
+  // 画像摘要独立通道（TP-4/D6/B7-R3）：摘要仅作提示词文本拼进本 instruction（只喂 LLM 语义消费的
+  // buildRankingPrompt），绝不并入 stateWords/excludes——后者会进入 effectiveExcludes/parseSessionConstraints/
+  // wantsInstrumental/transformationAllowed 等机器解析面，摘要散文里的体裁词（如“器乐/轻音乐”）会翻转器乐硬门
+  const instruction = [stateWords, excludes ? `不要：${excludes}` : '', constraintPrompt(constraints), profileSummary ? `用户长期画像：${profileSummary}` : ''].filter(Boolean).join('；')
   const recentPathInput = recentPath.length ? recentPath : undefined
 
   const picked: RecallCandidate[] = []
@@ -345,6 +355,7 @@ const localRank = (
   excludes: string,
   analysis: TrackAnalysis,
   constraints: LanguageConstraints,
+  profileBoost?: (artist: string) => number,
 ): RecallCandidate[] => {
   const seenTracks: RecallCandidate[] = []
   const items = pool
@@ -366,6 +377,8 @@ const localRank = (
       else if (t.source === 'playlist') score += 2
       if (t.recent) score += 1
       score += (i % 5) * 0.17
+      // 用户画像艺人加成（TP-4/D3）：在既有 clamp 之前叠加，clamp [0,100] 不变式由下行 Math.min/max 保持
+      if (profileBoost) score += profileBoost(t.artist ?? '')
       return { ...t, aiScore: Math.max(0, Math.min(100, score)) }
     })
     .sort((a, b) => Number(b.aiScore) - Number(a.aiScore))
@@ -458,7 +471,7 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
   if (options.ai?.apiKey) {
     for (let attempt = 0; ; attempt++) {
       try {
-        const aiRanked = await aiRank(options.ai, pool, anchor, radius, stateWords, activeExcludes, analysis, constraints, options.recentPath)
+        const aiRanked = await aiRank(options.ai, pool, anchor, radius, stateWords, activeExcludes, analysis, constraints, options.recentPath, options.profileSummary)
         if (aiRanked.length) {
           ranked = aiRanked
           engine = 'ai'
@@ -476,7 +489,7 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
     }
   }
   if (!ranked.length) {
-    ranked = localRank(pool, anchor, radius, stateWords, activeExcludes, analysis, constraints)
+    ranked = localRank(pool, anchor, radius, stateWords, activeExcludes, analysis, constraints, options.profileBoost)
   }
   if (!ranked.length) {
     // 文案优先级：器乐诉求 → 语言硬约束 → 通用（hints.emptyResultMessage，两级空结果共用）

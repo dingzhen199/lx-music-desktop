@@ -8,6 +8,9 @@
  * initRecommendRadio 负责电台开关的启动恢复与开关变化响应（D15/D10）；
  * TT-2：约束变更作废锚点分析（D3）——applyResult 记录分析所用约束快照，续补经 analysisStale 判废后
  * 不传 reuseAnalysis，引擎自动重新分析、召回方向随新约束换道（快照与 analysisCache 同生命周期）。
+ * TP-3：订阅画像信号广播——推荐曲正向信号背书即时入 run（等价 good 转移 + 续补，不发指标）；
+ * 切歌结算推荐曲 <30s 经 recordRecommendedSkip 回注画像 skips（D11）。
+ * TP-4：buildExploreOptions 注入画像 profileBoost（本地档艺人加成）与 profileSummary（AI 档独立通道，D6）。
  * 状态转移的纯逻辑在 session-core.ts（由 vitest 覆盖）；
  * 本文件依赖播放器状态/事件/引擎，属于集成层，验证方式为 tsc/lint/构建 + 手动冒烟（见 T-B2 报告）。
  */
@@ -23,8 +26,12 @@ import type { AiConfig, ExploreAnchor, ExploreOptions, ExploreResult } from './e
 import { startFeatureCollection, stopFeatureCollection } from './feature'
 import { sameSong } from './sameSong'
 import type { RankPathInput, TrackAnalysis } from './prompts'
+import { getProfileState, onProfileSignal, recordRecommendedSkip } from './profile'
+import { decideEndorsement, localBonus } from './profile-core'
+import type { ProfileSignal, RecommendedTrackRef } from './profile-core'
 import {
   RADIUS_DEFAULT,
+  SKIP_JUDGE_SECONDS,
   START_RADIO_DEBOUNCE_MS,
   accumulatePlayTime,
   addRecommendedIds,
@@ -83,9 +90,12 @@ let epoch = 0
 // ===== TT-4 本地指标（D9/D14）：编排层只在事件点构造事件，计数口径全部在 session-core =====
 /** 播放时长累计器：生命周期 = 单曲目，切歌结算上一首后换新零态（即“清零”动作）。 */
 let playTime: PlayTimeState = createPlayTimeState()
-/** 上一首的 id 与推荐归属（trackEnded 的推荐归属取上一首切换时的 on-path 结论，与 trackStarted 同源）。 */
+/** 上一首的 id 与推荐归属（trackEnded 的推荐归属取上一首切换时的 on-path 结论，与 trackStarted 同源）；
+ * 艺人/曲名供推荐曲 <30s 跳过的画像 skips 回注（TP-3/D11，判定材料本层现成，profile 无感知）。 */
 let lastSongId: string | null = null
 let lastSongRecommended = false
+let lastSongArtist = ''
+let lastSongTitle = ''
 /** 指标状态（水合后常驻内存、每次事件后直写落盘；null = 尚未水合）。 */
 let metricsState: MetricsState | null = null
 /**
@@ -137,16 +147,24 @@ const emitSongChangeMetrics = (play: ReturnType<typeof currentMusic>, nextOnPath
   const now = Date.now()
   if (lastSongId != null) {
     playTime = accumulatePlayTime(playTime, 'trackEnd', now)
+    const playedSeconds = readPlayedMs(playTime, now) / 1000
     emitMetrics({
       type: 'trackEnded',
       recommendedId: lastSongRecommended ? lastSongId : null,
-      playedSeconds: readPlayedMs(playTime, now) / 1000,
+      playedSeconds,
     })
+    // TP-3（D11/AC3）：推荐曲 30 秒内被切走 → 回注画像 skips 信号；非推荐曲跳过不入画像；
+    // 判定时长口径与 metrics 的 skippedUnder30s 同源（实际播放秒数，非切歌墙钟间隙）
+    if (lastSongRecommended && playedSeconds < SKIP_JUDGE_SECONDS) {
+      recordRecommendedSkip({ id: lastSongId, artist: lastSongArtist, title: lastSongTitle })
+    }
   }
   // 清零换曲：新一首从 0 起计
   playTime = createPlayTimeState()
   lastSongId = play?.id != null ? String(play.id) : null
   lastSongRecommended = nextOnPath
+  lastSongArtist = play?.singer ?? ''
+  lastSongTitle = play?.name ?? ''
   if (lastSongId != null) emitMetrics({ type: 'trackStarted', id: lastSongId, recommended: nextOnPath })
   // 自然接续切歌常无独立 pause/play 事件对，播放中切歌先开口子；随后播放器的 play 事件会被累计器
   // 按“重复 play 重新锚定”吸收，不会重复计时
@@ -266,6 +284,7 @@ const buildExploreOptions = (mode: 'initial' | 'refill'): ExploreOptions | null 
   // console.warn 为 AC3 冒烟的控制台可观察点（变化后的批次组头 instruction 为页面可观察点）
   const analysisDiscarded = mode === 'refill' && analysisStale(st, analysisInstruction)
   if (analysisDiscarded) console.warn('[session] 一句话约束已变更，作废缓存的锚点分析，本次计划重新分析')
+  const profileSummary = getProfileState()?.summary?.text
   return {
     anchor,
     ai: buildAiConfig(),
@@ -274,6 +293,12 @@ const buildExploreOptions = (mode: 'initial' | 'refill'): ExploreOptions | null 
     excludes: '',
     // 队尾统一（D6/AC2）：首计划与续补一律追加队尾，不再置顶插队到用户手动排队的歌之前
     appendMode: 'bottom',
+    // TP-4（D3）：本地档画像加成——闭包实时读取画像状态（localBonus 对无记录/垃圾艺人恒 0）
+    profileBoost: (artist: string) => localBonus(getProfileState(), artist),
+    // TP-4（D6 独立通道）：AI 档画像摘要有才传，且绝不拼进上方 instruction——instruction 会经
+    // exploreOnce 进入 stateWords 机器解析面（effectiveExcludes/parseSessionConstraints/wantsInstrumental），
+    // 摘要散文里的体裁词会翻转器乐硬门（B7-R3）；prompts.ts 零改动
+    ...(profileSummary ? { profileSummary } : {}),
     ...(mode === 'refill'
       ? {
           reuseAnalysis: analysisDiscarded ? undefined : (analysisCache ?? undefined),
@@ -567,6 +592,38 @@ export const applyFeedback = (kind: FeedbackKind): void => {
   scheduleRefill()
 }
 
+/**
+ * 背书判定的会话推荐集构造（TP-3）：path 条目（含 artist/title，sameSong 同曲变体判定用）
+ * + recommendedIds 中不在路径上的 id（仅 id 命中通道）。
+ */
+const buildRecommendedRefs = (st: SessionState): RecommendedTrackRef[] => {
+  const refs: RecommendedTrackRef[] = st.path.map(p => ({ id: p.id, artist: p.artist, title: p.title }))
+  const onPath = new Set(refs.map(r => (r.id != null ? String(r.id) : '')))
+  for (const id of st.recommendedIds) {
+    const key = String(id)
+    if (!onPath.has(key)) refs.push({ id: key })
+  }
+  return refs
+}
+
+/**
+ * 画像信号背书（TP-3/D5/D11）：正向信号（love/complete）命中本会话推荐集 → 该艺人进 positiveArtists
+ * （等价 applyFeedbackCore 的 good 转移）并触发一次续补；不 emit feedback 指标事件（D5：显式 far/good 口径不变）。
+ * 非命中信号与无会话时不动作；重锚/收台后旧推荐集自然失效（decideEndorsement 查的是当前会话推荐集），无需额外处理。
+ */
+const handleProfileSignal = (signal: ProfileSignal): void => {
+  const st = state.value
+  if (!st) return
+  const artist = decideEndorsement(buildRecommendedRefs(st), signal)
+  if (!artist) return
+  state.value = applyFeedbackCore(st, 'good', artist)
+  // 与既有显式反馈续补共用 scheduleRefill 的防抖/单飞
+  scheduleRefill()
+}
+
+// 订阅画像信号广播（模块加载即注册一次；无会话时 handler 恒不动作，无需随会话生命周期增删）
+onProfileSignal(handleProfileSignal)
+
 /** 更新探索距离（滑杆；下次续补生效，并防抖触发一次续补让改动可感知）。 */
 export const setRadius = (radius: number): void => {
   const st = state.value
@@ -681,3 +738,15 @@ export const initRecommendRadio = (): void => {
 }
 
 export { lastErrorKind, refillState }
+
+/** dev hook（非生产门控，先例 profile.ts registerDevHook）：向引擎先行注册的 __lxRecommend 增量挂载，
+ * 对象缺失时自建兜底（不沉默依赖模块加载序；engine.ts 侧是整体赋值的旧模式，本层照 profile.ts 增量模式）。 */
+const registerDevHook = (): void => {
+  if (typeof window === 'undefined' || window.lx?.isProd) return
+  const hook = ((window as unknown as Record<string, unknown>).__lxRecommend ??= {}) as Record<string, unknown>
+  // 只读快照：返回拷贝，console 调试侧的任何篡改不影响模块内状态（TP-3/B7-M4，冒烟与调试依赖）；
+  // sessionView 嵌套属性仍是 reactive Proxy（state 为深响应化 ref，toView 仅浅展开），structuredClone 会抛
+  // DataCloneError，故用 JSON 往返（本会话视图为纯 JSON 可序列化数据；profile() 用 structuredClone 是因为其数据源未经 reactive）
+  hook.session = () => JSON.parse(JSON.stringify(sessionView.value)) as SessionView
+}
+if (typeof window !== 'undefined' && !window.lx?.isProd) registerDevHook()
