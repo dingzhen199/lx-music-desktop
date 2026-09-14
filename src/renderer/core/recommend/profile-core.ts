@@ -109,6 +109,17 @@ const toTitle = (value: unknown): string => String(value ?? '').trim()
 const toKind = (value: unknown): ProfileSignalKind | null =>
   value === 'love' || value === 'complete' || value === 'skip' ? value : null
 
+/**
+ * 收藏幂等判定：滚动事件缓冲（≤500 窗口）中已存在同曲（artist+title，sameSong 口径，与 id 无关）
+ * 的 love 事件时，新 love 信号视为重复背书。
+ * 存在理由：「我喜欢」未加载进内存时 listMusicAdd 的早退路径按原始入参发射（此刻无列表无法去重，
+ * D10 补裁），重复收藏、取消后再收藏的重复证据统一在此兜底消除；旧 love 事件被 FIFO 淘汰出窗口后
+ * 再收藏同曲恢复计入（窗口语义，D2）。
+ */
+const isDuplicatedLove = (events: ProfileEvent[], artist: string, title: string): boolean => {
+  return events.some(event => event.kind === 'love' && sameSong(event, { artist, title }))
+}
+
 /** 证据量：分信号计数之和（艺人表截断与摘要 Top 排行的共用权重——不分极性，被触达最多的艺人优先保留）。 */
 const evidenceWeight = (entry: ArtistCounts): number => entry.love + entry.complete + entry.skip
 
@@ -138,6 +149,10 @@ export const createProfileState = (): ProfileState => ({
  * 行为信号归并 reducer（不可变转移：返回新对象；垃圾信号原样返回原引用）：
  * - kind 必须是 love/complete/skip 之一；
  * - 空艺人信号整体丢弃（画像底座仅艺人维度，无法归因的信号不产生任何计数/事件，垃圾值不污染）；
+ * - love 幂等口径（D10/D13 补裁）：同曲（artist+title，sameSong 判定，与 id 无关）的 love 已存在于
+ *   滚动事件缓冲时不动作（返回原状态引用：loves 总计数、艺人 love 计数、事件缓冲均不增）——
+ *   语义 = "同一首歌的重复收藏不产生重复证据（含取消后再收藏，窗口内不重复计）"；
+ *   这是未加载列表早退发射路径（无法去重）的兜底；complete/skip 不受此限（重复听完/跳过是合法的重复证据）；
  * - 三类总计数器单调 +1（独立于艺人表截断）；
  * - 艺人表对应艺人的分信号计数 +1 后按证据量 Top200 截断；
  * - 事件缓冲追加 {kind, artist, title} 后按 ≤500 FIFO 丢弃最旧。
@@ -150,6 +165,9 @@ export const reduceProfileSignal = (state: ProfileState | null | undefined, sign
   const artist = toArtist(signal.artist)
   if (!artist) return st
   const title = toTitle(signal.title)
+
+  // love 幂等（口径见 isDuplicatedLove 注记）：重复背书不动作，原引用返回使编排层不落盘不广播
+  if (kind === 'love' && isDuplicatedLove(st.events, artist, title)) return st
 
   const prevEntry = st.artistCounts[artist]
   const entry: ArtistCounts = {

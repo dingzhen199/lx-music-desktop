@@ -3,7 +3,7 @@
  *
  * 职责：常驻 window.app_event 播放事件订阅（musicToggled/play/pause/playerLoadeddata，自有
  * PlayTimeState 时长累计器；不开电台也累计画像，与 session.ts 指标订阅并存互不依赖）、
- * 收藏事件桥订阅（loveListMusicsAdded，来源是 listMusicAdd 去重后实际新增，D10/D13）、
+ * 收藏事件桥订阅（loveListMusicsAdded，来源是 listMusicAdd 去重后实际新增或列表未加载时的原始入参发射；重复收藏的幂等由 reducer 同曲归一兜底，D10/D13）、
  * 切歌结算听完信号（isCompleteListen，时长快照锚定 playerLoadeddata——切歌点 maxPlayTime
  * 恒已被清零，不可作快照点，D9）、onProfileSignal 信号广播注册表（session 侧背书订阅，D11）、
  * recordRecommendedSkip 主动入口（推荐曲 <30s 跳过由 session 结算后回注，TP-3 接线）、

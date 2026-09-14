@@ -67,3 +67,16 @@ TP-6 blocked by TP-3 + TP-4 + TP-5（收尾）
 ## C 阶段完成标准（呼应主流程 §3 D）
 
 六票全部合入且：每张票验收项通过；每轮 code-review 双轴审核 + 修复后双段审核无 block/critic/major；最终 `npm run build`、`npm run lint`、`npm run test`（含既有与新增）全绿；`docs/` 下相关文档复查无过时。
+
+---
+
+## 合入后注记（2026-09-14）
+
+**e2e 冒烟发现并修复的缺陷（TP-1/TP-2 收藏捕获链路，探针确诊）：**
+- 现象：生产构建 e2e 中收藏一首歌，`myListUpdate(["love"])` 触发但 `recommendProfile` 键始终不落盘、`app_event.loveListMusicsAdded` 从未发射。
+- 根因：`rendererListManage.ts` 的 `allMusicList` 懒加载（`getListMusics` 才填充某列表）；`listMusicAdd` 首行 `allMusicList.get(id)` 未命中即早退——用户本次会话从未打开过「我喜欢」页面时，函数在到达 TP-2 挂钩行（去重后发射）之前返回，信号永久丢失（早退路径同样返回 `[id]`，故 `myListUpdate` 正常触发）。
+- 修法（两层）：
+  - 集成层（action.ts）：`listMusicAdd` 早退分支在 `id == loveList.id` 且原始 `musicInfos` 非空时按原始入参发射 `loveListMusicsAdded`（此刻无列表无法去重）；已加载路径"去重后非空才发射"逻辑与早退返回值语义不变。
+  - 纯逻辑（profile-core.ts）：`reduceProfileSignal` 增 love 幂等——同曲（artist+title，sameSong 口径，与 id 无关）的 love 已存在于 ≤500 滚动事件缓冲时不动作（返回原状态引用：总计数/艺人计数/事件均不增）；complete/skip 不受限（重复听完/跳过是合法的重复证据）；旧 love 被 FIFO 淘汰出窗口后再收藏恢复计入。该幂等同时兜底重复收藏与取消后再收藏（D13 口径补充：窗口内不重复计）。
+- 测试：profile-core.test.ts 新增 5 例（重复同曲幂等、变体写法幂等、不同歌正常计入、FIFO 窗口恢复计入、complete/skip 不受限）；既有 49 例零断言调整。
+- 文档：spec.md D10 行与边界收藏捕获点条已同步补充两层口径。

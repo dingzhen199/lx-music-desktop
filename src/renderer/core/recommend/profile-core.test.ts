@@ -153,6 +153,74 @@ describe('reduceProfileSignal - 信号归并', () => {
   })
 })
 
+describe('reduceProfileSignal - love 幂等（同曲重复收藏不产生重复证据）', () => {
+  it('同曲（artist+title）重复 love 第二次不动作：返回原状态引用、计数与事件均不增', () => {
+    // arrange
+    const state = reduceProfileSignal(createProfileState(), { kind: 'love', artist: '陈奕迅', title: '富士山下', id: 'kw_1' })
+    // act
+    const next = reduceProfileSignal(state, { kind: 'love', artist: '陈奕迅', title: '富士山下', id: 'kw_1' })
+    // assert
+    expect(next).toBe(state)
+    expect(next.loves).toBe(1)
+    expect(next.artistCounts['陈奕迅']).toEqual({ love: 1, complete: 0, skip: 0 })
+    expect(next.events).toHaveLength(1)
+  })
+
+  it('同曲变体写法（艺人大小写/标题空白差异、id 不同）的重复 love 同样幂等——幂等与 id 无关', () => {
+    // arrange
+    const state = reduceProfileSignal(createProfileState(), { kind: 'love', artist: 'Eason Chan', title: ' 富士山下 ', id: 'kw_1' })
+    // act
+    const next = reduceProfileSignal(state, { kind: 'love', artist: 'eason chan', title: '富士山下', id: 'kg_9' })
+    // assert
+    expect(next).toBe(state)
+    expect(state.loves).toBe(1)
+  })
+
+  it('不同歌的 love 正常计入（同艺人不同名 / 同名不同艺人）', () => {
+    // arrange
+    let state = reduceProfileSignal(createProfileState(), loveSignal('陈奕迅', { title: '富士山下' }))
+    // act
+    state = reduceProfileSignal(state, loveSignal('陈奕迅', { title: '淘汰' }))
+    state = reduceProfileSignal(state, loveSignal('别的艺人', { title: '富士山下' }))
+    // assert
+    expect(state.loves).toBe(3)
+    expect(state.events).toHaveLength(3)
+    expect(state.artistCounts['陈奕迅'].love).toBe(2)
+    expect(state.artistCounts['别的艺人'].love).toBe(1)
+  })
+
+  it('窗口语义：旧 love 事件被 FIFO 淘汰出缓冲后，同曲再收藏重新计入', () => {
+    // arrange：缓冲塞满，旧 love 位于窗口最深处
+    const filler: ProfileEvent[] = Array.from({ length: MAX_EVENTS - 1 }, (_, i) => ({ kind: 'complete', artist: `艺人${i}`, title: `曲${i}` }))
+    const seeded: ProfileState = { ...createProfileState(), loves: 1, events: [{ kind: 'love', artist: '陈奕迅', title: '富士山下' }, ...filler] }
+    // act：喂一条无关信号把旧 love 挤出窗口后再收藏同曲
+    const pushed = reduceProfileSignal(seeded, { kind: 'skip', artist: '噪音艺人', title: '噪音曲' })
+    expect(pushed.events).toHaveLength(MAX_EVENTS)
+    expect(pushed.events.some(e => e.kind === 'love' && e.artist === '陈奕迅')).toBe(false)
+    const next = reduceProfileSignal(pushed, loveSignal('陈奕迅', { title: '富士山下' }))
+    // assert
+    expect(next.loves).toBe(pushed.loves + 1)
+    expect(next.artistCounts['陈奕迅']).toEqual({ love: 1, complete: 0, skip: 0 })
+    expect(next.events.filter(e => e.kind === 'love')).toHaveLength(1)
+  })
+
+  it('complete/skip 重复信号不受幂等限制（重复听完/跳过是合法的重复证据）', () => {
+    // arrange
+    let state = createProfileState()
+    // act
+    state = reduceProfileSignal(state, { kind: 'complete', artist: '陈奕迅', title: '富士山下' })
+    state = reduceProfileSignal(state, { kind: 'complete', artist: '陈奕迅', title: '富士山下' })
+    state = reduceProfileSignal(state, { kind: 'skip', artist: '噪音艺人', title: '噪音曲' })
+    state = reduceProfileSignal(state, { kind: 'skip', artist: '噪音艺人', title: '噪音曲' })
+    // assert
+    expect(state.completes).toBe(2)
+    expect(state.skips).toBe(2)
+    expect(state.events).toHaveLength(4)
+    expect(state.artistCounts['陈奕迅']).toEqual({ love: 0, complete: 2, skip: 0 })
+    expect(state.artistCounts['噪音艺人']).toEqual({ love: 0, complete: 0, skip: 2 })
+  })
+})
+
 describe('isCompleteListen - 听完判定（≥90% 时长）', () => {
   it('播放恰好 90% 时长为听完（浮点边界安全）', () => {
     // act & assert

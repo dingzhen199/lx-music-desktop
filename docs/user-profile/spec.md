@@ -21,7 +21,7 @@
 ## 边界
 
 - 新增集中在 `src/renderer/core/recommend/`（新增 `profile-core.ts` 纯函数模块 + `profile.ts` 编排适配器）；存量改动点：`session.ts`（背书接线、画像 `profileSummary`/`profileBoost` 经 `buildExploreOptions` 透传）、`engine.ts`（`ExploreOptions` 增 `profileBoost`/`profileSummary` 两个可选入口：前者供 localRank 加分调用，后者仅在 aiRank 内拼入排序提示词文本）、`src/renderer/store/list/listManage/action.ts`（收藏收口挂钩一处）、`src/renderer/utils/data.ts`（画像落盘读写对）、`ipc.ts`/管道层的键注册。
-- 收藏捕获点唯一：`src/renderer/store/list/listManage/action.ts` 的 `listMusicAdd`——渲染端真实落单与按 id 去重的唯一收口（B7-C2 复核：`listMusicMove` 委托 `listMusicAdd` 故 move-into-love 自动覆盖；sync 远端合入同走此函数，本人他端收藏同为证据，**计入**）；通知仅在其内部去重后仍有实际新增时发出，且**必须经 `window.app_event` 事件桥**（AppEvent 增一个发射方法，如 `loveListMusicsAdded`），profile.ts 订阅该事件——window 全局通信，双方零新增 import 边，依赖方向恒为 session → profile 单向（B7-M1/M2 补裁，不以"告警"为降级条件）。
+- 收藏捕获点唯一：`src/renderer/store/list/listManage/action.ts` 的 `listMusicAdd`——渲染端真实落单与按 id 去重的唯一收口（B7-C2 复核：`listMusicMove` 委托 `listMusicAdd` 故 move-into-love 自动覆盖；sync 远端合入同走此函数，本人他端收藏同为证据，**计入**）；通知在其内部去重后仍有实际新增时发出；**列表未加载进内存时（`allMusicList` 懒加载，早退路径）按原始入参发射——此刻无列表无法去重，重复收藏/取消后再收藏的幂等由 profile-core `reduceProfileSignal` 的同曲 love 去重兜底**；通知**必须经 `window.app_event` 事件桥**（AppEvent 增一个发射方法，如 `loveListMusicsAdded`），profile.ts 订阅该事件——window 全局通信，双方零新增 import 边，依赖方向恒为 session → profile 单向（B7-M1/M2 补裁，不以"告警"为降级条件）。
 - 听完/跳过捕获独立于电台订阅：profile.ts 自挂常驻 `window.app_event` 订阅（play/pause/musicToggled/playerLoadeddata + 曲首时长快照），不开电台也累计画像；挂载点在 `core/useApp/index.ts` 且**必须先于 useDataInit 完成注册**（沿用 `initRecommendRadio` 先例，否则启动恢复的首个 `musicToggled` 被吞）。
 - 背书只响应"对象为本台推荐曲"的正向信号（当前会话 `recommendedIds` 命中，含同曲变体）；其余信号只进画像。推荐曲跳过的归属判定由 **session 侧**完成（其切歌结算已有 on-path 判定结论），经 profile 公开的主动入口回注；profile 不 import session（B7-M1 补裁）。
 
@@ -38,7 +38,7 @@
 | D7 | LLM 摘要：每累计 ≥20 个新正向事件 fire-and-forget 重写一次；输入 = Top50 艺人计数 + 最近 100 条事件；无 Key 不调用；失败保留旧摘要；成功落盘 `basedOnCount` | Q7 |
 | D8 | 存储：`data.json` 新增 `recommendProfile` 键，走 data.ts 读写对 + 宽松水合（沿用 recommendMetrics 先例） | Q10 |
 | D9 | 听完判定：切歌结算点比较 play/pause 累计秒数与**曲首时长快照**；快照锚定 `playerLoadeddata` 事件（`setPlayMusicInfo` 先 `setProgress(0,0)` 后派发 `musicToggled`，切歌点 `maxPlayTime` 恒已被清零，不可作快照点）；元数据加载前被切走的曲目时长未知，保守不判定 | Q3 + B7-C1 补裁 |
-| D10 | 收藏捕获挂钩在 `listMusicAdd` 去重后非空时经 app_event 桥通知；听完捕获用独立常驻订阅，与 session.ts 指标订阅并存互不依赖 | B7-C2 补裁 |
+| D10 | 收藏捕获挂钩在 `listMusicAdd` 去重后非空时经 app_event 桥通知（列表未加载进内存时按原始入参发射，此刻无法去重，重复幂等由 profile reducer 的同曲 love 去重兜底）；听完捕获用独立常驻订阅，与 session.ts 指标订阅并存互不依赖 | B7-C2 补裁 |
 | D11 | 依赖方向恒为 session → profile 单向：session 订阅 profile 信号广播完成背书判定，推荐曲跳过由 session 结算后回注；profile 不 import session；收藏通知走 `window.app_event` 桥（零 import 边） | B7-M1/M2 补裁 |
 | D12 | 摘要文本约束：`buildSummaryPrompt` 提示词侧限定"只正向描述偏好、不含指令式措辞"，输出落盘前按 ≤200 字截断；**不设词表消毒**——注入通道已与全部机器解析面隔离（D6），词表防护无意义且是对解析器触发词的打地鼠 | B7-M3 补裁，B7-R3 修订 |
 | D13 | 取消收藏不回扣计数、不产生负向信号；整单恢复/迁移不产生信号；sync 远端合入的收藏计入 | B7-C2 补裁 |

@@ -245,7 +245,13 @@ export const listMusicClear = (ids: string[]): string[] => {
 
 export const listMusicAdd = (id: string, musicInfos: LX.Music.MusicInfo[], addMusicLocationType: LX.AddMusicLocationType): string[] => {
   const targetList = allMusicList.get(id)
-  if (!targetList) return id == loveList.id ? [id] : []
+  if (!targetList) {
+    // TP-2 画像收藏捕获点（D10/D13 补裁）：allMusicList 懒加载（getListMusics 才填充），列表未进过内存时
+    // 此早退会让收藏信号永久丢失——按原始入参发射（此刻无列表无法去重），重复收藏/取消后再收藏的幂等
+    // 下沉到 profile-core.reduceProfileSignal 的同曲 love 去重兜底；早退返回值等运行语义不变
+    if (id == loveList.id && musicInfos.length) window.app_event.loveListMusicsAdded(musicInfos)
+    return id == loveList.id ? [id] : []
+  }
 
   const listSet = new Set<string>()
   for (const item of targetList) listSet.add(item.id)
