@@ -42,7 +42,7 @@ import type { AnchorLike, RankCandidateInput, RankPathInput, TrackAnalysis } fro
 import { recallCandidates } from './recall'
 import type { RecallAnchor, RecallCandidate } from './recall'
 import { filterExcludeTracks } from './candidatePool'
-import { shouldBlockLowConfidence } from './confidenceGate'
+import { normalizeConfidence, shouldBlockLowConfidence } from './confidenceGate'
 import { emptyResultMessage } from './hints'
 import { includesSameSong, pushUniqueSameSong } from './sameSong'
 import type { SongRef } from './sameSong'
@@ -225,6 +225,12 @@ const rankingWorldBreak = (row: unknown, radius: number): boolean => {
 /** AI 排序分批大小：候选最多 48 条，单次提示过长既拖慢生成也容易触发超时；分批让模型每次只判断最多 16 首。 */
 const RANK_BATCH_SIZE = 16
 
+/**
+ * LLM 行级距离标签 → 感知距离分（0-100）映射；标签未知/缺失时按中线 50。
+ * 与召回侧 gates.SEMANTIC_DISTANCE_*（按查询序号分配距程）语义不同，数值相近纯属巧合，勿共用常量。
+ */
+const DISTANCE_LABEL_SCORE: Record<string, number> = { near: 24, medium: 50, far: 76 }
+
 /** LLM 排序：字段映射参照 from-here aiRank 的 enriched / aestheticReject 语义。 */
 const aiRank = async(
   ai: AiConfig,
@@ -285,13 +291,14 @@ const aiRank = async(
       if (rowLanguageBlocked(row, track, constraints)) continue
       if (!eligibleByFormat(track, analysis, stateWords, excludes) || exclusionHit(track, excludes)) continue
       if (rankingWorldBreak(row, radius)) continue
-      const confidence = String(row.confidence || 'medium').toLowerCase()
+      // 归一口径已收口 confidenceGate：本变量同时供守门判定与下方候选透传，二者共用同一归一值
+      const confidence = normalizeConfidence(row.confidence)
       if (shouldBlockLowConfidence(confidence)) continue
 
       const label = String(row.distance_from_anchor || '').toLowerCase()
       const explicit = Number(row.perceptual_distance)
       let mapped: number | null = Number.isFinite(explicit) ? Math.max(0, Math.min(100, explicit)) : null
-      if (mapped == null) mapped = label === 'near' ? 24 : label === 'medium' ? 50 : label === 'far' ? 76 : 50
+      if (mapped == null) mapped = DISTANCE_LABEL_SCORE[label] ?? 50
       if (mapped > radius + 10 && radius <= 65) continue
 
       const enriched: RecallCandidate = {

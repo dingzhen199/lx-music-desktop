@@ -13,12 +13,20 @@
  */
 
 /**
+ * 置信度归一（判定与 engine 候选透传共用的唯一口径）：
+ * 缺失/空串/falsy 按 'medium'（引擎旧内联表达式 `String(c || 'medium')` 的原口径），
+ * 一律小写化；非常规字符串原样保留（不强行归入 high/medium/low 三档）。
+ */
+export const normalizeConfidence = (raw: unknown): string => {
+  // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- || 是语义本身：空串须落缺省 medium，?? 会把空串放行
+  return String((raw as string | null | undefined) || 'medium').toLowerCase()
+}
+
+/**
  * 该候选行是否因低置信应被拦截：
- * 仅 confidence 小写化后严格等于 'low' 才拦；
- * high/medium/缺失（空串/null/undefined）/非字符串一律放行。
+ * 仅 confidence 归一后严格等于 'low' 才拦（engine 原本用 radius<=45 时的同字符串判定，
+ * 归一口径对齐后：'low' 拦、其余含缺失一律放行，与旧 String(c ?? '') 判定逐值等价）。
  */
 export const shouldBlockLowConfidence = (confidence: unknown): boolean => {
-  // null/undefined 先归空串再 String，与 vocalGate 的 String(x ?? '') 口径一致；
-  // 'null'/'undefined' 字面量本就不等于 'low'，归一只是避免依赖 String 转换的隐式字面量
-  return String(confidence ?? '').toLowerCase() === 'low'
+  return normalizeConfidence(confidence) === 'low'
 }

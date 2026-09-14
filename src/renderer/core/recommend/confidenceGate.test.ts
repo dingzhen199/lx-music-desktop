@@ -6,7 +6,7 @@
  * 以此钉死"全半径拦"）；高/中置信、空串、null/undefined、非字符串一律放行。
  */
 import { describe, expect, it } from 'vitest'
-import { shouldBlockLowConfidence } from './confidenceGate'
+import { normalizeConfidence, shouldBlockLowConfidence } from './confidenceGate'
 
 describe('shouldBlockLowConfidence - 低置信全半径拦截', () => {
   it("'low' → true（近距档：旧口径 radius<=45 唯一会拦的一档）", () => {
@@ -64,5 +64,31 @@ describe('shouldBlockLowConfidence - 低置信全半径拦截', () => {
     expect(shouldBlockLowConfidence(0)).toBe(false)
     expect(shouldBlockLowConfidence(false)).toBe(false)
     expect(shouldBlockLowConfidence({ level: 'low' })).toBe(false)
+  })
+})
+
+describe('normalizeConfidence - 置信度归一', () => {
+  it('缺失（undefined/null/空串）→ 缺省 medium（与引擎旧内联表达式口径一致）', () => {
+    // act & assert
+    expect(normalizeConfidence(undefined)).toBe('medium')
+    expect(normalizeConfidence(null)).toBe('medium')
+    expect(normalizeConfidence('')).toBe('medium')
+  })
+
+  it('大小写不一 → 小写化（LOW→low、High→high）', () => {
+    // act & assert
+    expect(normalizeConfidence('LOW')).toBe('low')
+    expect(normalizeConfidence('High')).toBe('high')
+  })
+
+  it('非常规字符串原样保留（仅小写化，不强行归入三档）', () => {
+    // act & assert
+    expect(normalizeConfidence('古怪值')).toBe('古怪值')
+  })
+
+  it('falsy 非字符串（0/false）→ 缺省 medium（旧表达式同口径）', () => {
+    // act & assert
+    expect(normalizeConfidence(0)).toBe('medium')
+    expect(normalizeConfidence(false)).toBe('medium')
   })
 })
