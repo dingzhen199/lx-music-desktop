@@ -28,10 +28,10 @@ export type RecallCandidate = TrackLike & {
   distance: number
 }
 
-/** 一条召回查询。 */
+/** 一条召回查询。reason 仅语义方向携带（逐条理由，回写候选的 semanticReason；同艺人方向无）。 */
 export interface RecallQuery {
   keyword: string
-  reason: string
+  reason?: string
   kind: 'same-artist' | 'semantic'
 }
 
@@ -83,7 +83,7 @@ export function buildRecallQueries(
   const queries: RecallQuery[] = []
   if (options.sameArtistAllowed !== false) {
     const keyword = sameArtistKeyword(anchor)
-    if (keyword) queries.push({ keyword, reason: '围绕当前艺人保持较近的听感边界', kind: 'same-artist' })
+    if (keyword) queries.push({ keyword, kind: 'same-artist' })
   }
   for (const q of recallQueries(analysis, radius)) {
     queries.push({ keyword: q.keyword, reason: q.reason, kind: 'semantic' })
@@ -91,10 +91,26 @@ export function buildRecallQueries(
   return queries
 }
 
-/** 感知距离：与 from-here tracksFrom 一致（语义按语义查询序号递增，同艺人最近）。 */
-const distanceFor = (kind: RecallQuery['kind'], semanticIndex: number): number => {
-  return kind === 'same-artist' ? 8 : SEMANTIC_DISTANCE_BASE + semanticIndex * SEMANTIC_DISTANCE_STEP
-}
+/**
+ * 召回方向档案：距离生成、来源标注、固定理由、逐条理由回写与语义序号消耗按 kind 收敛于此
+ * （此前同一 kind 判定散在 distanceFor/searchByQuery/recallCandidates 五处三元，新增方向需逐处同步）。
+ * 距离口径与 from-here tracksFrom 一致：同艺人恒最近（8），语义按查询序号 24+7*i 递增。
+ */
+const KIND_PROFILE = {
+  'same-artist': {
+    source: 'same-artist',
+    reason: '保留起点熟悉的声音与表达方式',
+    // 不消耗语义查询序号；参数位置只为与语义档对齐，恒弃用
+    distance: (_semanticIndex: number): number => 8,
+    semantic: false,
+  },
+  semantic: {
+    source: 'semantic-search',
+    reason: '沿着起点的声音气质继续展开',
+    distance: (semanticIndex: number): number => SEMANTIC_DISTANCE_BASE + semanticIndex * SEMANTIC_DISTANCE_STEP,
+    semantic: true,
+  },
+} as const
 
 /**
  * 归一化候选为 TrackLike（source 为召回来源标记）。
@@ -139,9 +155,10 @@ const searchByQuery = async(
     console.error('[recall] 搜索失败', q.keyword, err)
     return out
   }
-  const distance = distanceFor(q.kind, semanticIndex)
-  const source = q.kind === 'same-artist' ? 'same-artist' : 'semantic-search'
-  const reason = q.kind === 'same-artist' ? '保留起点熟悉的声音与表达方式' : '沿着起点的声音气质继续展开'
+  const profile = KIND_PROFILE[q.kind]
+  const distance = profile.distance(semanticIndex)
+  const source = profile.source
+  const reason = profile.reason
   for (const result of results ?? []) {
     if (!result?.list) continue
     for (const raw of result.list.slice(0, 10)) {
@@ -151,7 +168,7 @@ const searchByQuery = async(
         out.push(toCandidate(info, source, {
           distance,
           reason,
-          semanticReason: q.kind === 'semantic' ? q.reason : undefined,
+          semanticReason: profile.semantic ? q.reason : undefined,
           loveIds,
           recentIds,
         }))
@@ -221,7 +238,7 @@ export const recallCandidates = async(
   // 并行执行所有查询（同艺人 + 语义），单条失败不影响整体。
   let semanticIndex = 0
   const searchResults = await Promise.all(queries.map(async(q) => {
-    const index = q.kind === 'semantic' ? semanticIndex++ : 0
+    const index = KIND_PROFILE[q.kind].semantic ? semanticIndex++ : 0
     return searchByQuery(q, index, loveIds, recentIds).catch(err => {
       errors.push(`${q.kind}:${q.keyword}: ${(err as Error).message}`)
       return []

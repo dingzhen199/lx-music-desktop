@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { buildRecallQueries, recallCandidates } from './recall'
+import type { RecallAnchor } from './recall'
+import type { TrackAnalysis } from './prompts'
+
 // recall.ts 的顶层导入含 renderer 运行时模块（store/musicSdk 桶文件），
 // vitest 下整体 mock，只保留本测试需要的行为出口；toNewMusicInfo 归一化以恒等替代
 // （raw 直接按 MusicInfo 形状构造，rawHasId 需 songmid/hash 等任一 id 字段）。
@@ -14,10 +18,6 @@ vi.mock('@renderer/store/list/listManage/state', () => ({ loveList: { id: 'likel
 vi.mock('@renderer/store/player/state', () => ({ playedList: [] }))
 vi.mock('@renderer/utils', () => ({ toNewMusicInfo: (raw: unknown) => raw }))
 
-import { buildRecallQueries, recallCandidates } from './recall'
-import type { RecallAnchor } from './recall'
-import type { TrackAnalysis } from './prompts'
-
 /** 光明正大的 raw 曲目（identity 归一化下即 MusicInfo），带 songmid 通过 rawHasId。 */
 const rawSong = (id: string, singer: string, name: string) => ({
   id,
@@ -27,15 +27,42 @@ const rawSong = (id: string, singer: string, name: string) => ({
   meta: { albumName: '' },
 })
 
-/** 一路方向生成 n 个语义关键词的分析形状。 */
-const analysisWith = (keywords: string[]): Pick<TrackAnalysis, 'recallDirections'> => ({
+/** 生成含 n 个语义关键词的完整分析形状（recallCandidates 形参要求全量 TrackAnalysis，其余字段填零值）。 */
+const analysisWith = (keywords: string[]): TrackAnalysis => ({
+  summary: '',
+  anchorLanguage: { code: '', confidence: '', reason: '' },
+  aesthetic: {
+    why_it_stops_you: '',
+    human_state: [],
+    tension: [],
+    world: '',
+    unspoken: '',
+    avoid_reductions: [],
+    surprise_axes: [],
+  },
+  fingerprint: {
+    vocal_identity: [],
+    emotional_core: [],
+    imagery: [],
+    rhythm_motion: [],
+    dynamics: [],
+    instrumentation_texture: [],
+    melody_harmony: [],
+    narrative: [],
+    must_preserve: [],
+    can_drift: [],
+  },
   recallDirections: [{
     name: '方向A',
     reason: '理由A',
     aestheticBridge: '桥A',
-    searchKeywords: keywords,
+    preserve: [],
+    drift: [],
     searchArtists: [],
-  } as unknown as TrackAnalysis['recallDirections'][number]],
+    searchKeywords: keywords,
+    targetLanguage: '',
+  }],
+  avoidTransforms: [],
 })
 
 const anchor: RecallAnchor = { artist: '某乐队', title: '某歌', singer: '某乐队', name: '某歌' }
@@ -76,11 +103,11 @@ describe('buildRecallQueries - 召回查询构建', () => {
     expect(queries).toEqual([])
   })
 
-  it('语义理由按方向字段拼接携带，同艺人查询带固定理由（现值钉死）', () => {
-    // arrange & act：同艺人查询的 reason 当前为固定串（搜索时被 kind 三元覆盖，属死值——重构将删除）
+  it('语义理由按方向字段拼接携带；同艺人查询不携带逐条理由', () => {
+    // arrange & act
     const queries = buildRecallQueries(anchor, analysisWith(['k1']), 35)
     // assert
-    expect(queries[0]).toEqual({ keyword: '某乐队', reason: '围绕当前艺人保持较近的听感边界', kind: 'same-artist' })
+    expect(queries[0]).toEqual({ keyword: '某乐队', kind: 'same-artist' })
     expect(queries[1]).toEqual({ keyword: 'k1', reason: '桥A；理由A；方向A', kind: 'semantic' })
   })
 })
