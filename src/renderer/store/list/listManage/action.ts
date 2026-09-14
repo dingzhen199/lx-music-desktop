@@ -265,6 +265,11 @@ export const listMusicAdd = (id: string, musicInfos: LX.Music.MusicInfo[], addMu
       break
   }
 
+  // TP-2 画像收藏捕获点（D10/D13）：仅去重过滤后仍有实际新增时经 app_event 桥通知（零 import 边）；
+  // listMusicMove 委托本函数故 move-into-love 自动覆盖，sync 远端合入同走本函数计入；
+  // 整单恢复/迁移经 overwriteMusicList 不经由本函数，不产生信号
+  if (id == loveList.id && musicInfos.length) window.app_event.loveListMusicsAdded(musicInfos)
+
   return [id]
 }
 

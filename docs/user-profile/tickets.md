@@ -19,7 +19,7 @@ TP-6 blocked by TP-3 + TP-4 + TP-5（收尾）
   - `decideEndorsement(会话推荐曲目集, 信号) → 艺人 | null`：仅正向信号、仅推荐集命中（id 或 sameSong 同曲变体）时返回艺人。
   - `localBonus(状态, 艺人) → [-10, +10]`：loves 重、completes 轻、skips 负（权重系数为 Implementation，藏模块内）。
   - `summaryDue(状态)`：`(loves + completes) - summary.basedOnCount >= 20`。
-  - `buildSummaryPrompt(topArtists≤50, events≤100) → 摘要消息`（纯构建器；提示词侧限定"只正向描述偏好、不含指令式措辞"，摘要落盘前 ≤200 字截断，D12）。
+  - `buildSummaryPrompt(状态) → 摘要消息`（纯构建器，内部取 Top50 艺人计数与近 100 条事件；提示词侧限定"只正向描述偏好、不含指令式措辞"，摘要落盘前 ≤200 字截断，D12）。
   - `hydrateProfile(快照)` 宽松水合（沿用 hydrateMetrics 口径：有效字段保留、垃圾字段缺省）。
 - 验证：全部 vitest（含边界：截断恒成立、水合垃圾容错、90% 判定点、同曲变体命中、无摘要时 basedOnCount=0 触发首轮）。
 - AC：支撑 AC1–AC6 的谓词级部分。

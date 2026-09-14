@@ -308,6 +308,19 @@ export const getRecommendMetrics = async() => {
   return rendererInvoke<string, unknown>(WIN_MAIN_RENDERER_EVENT_NAME.get_data, DATA_KEYS.recommendMetrics)
 }
 
+// TP-2（D8）：本地用户画像快照（单 JSON，不进设置项）；
+// 与 recommendMetrics 同一通用管道：unknown 透传，快照形状归 profile-core 所有，类型收口在特性门面 data.ts
+export const saveRecommendProfile = (profile: unknown) => {
+  rendererSend(WIN_MAIN_RENDERER_EVENT_NAME.save_data, {
+    path: DATA_KEYS.recommendProfile,
+    data: profile,
+  })
+}
+// 获取本地用户画像快照（无存档为 null，由调用方 hydrate 归一）
+export const getRecommendProfile = async() => {
+  return rendererInvoke<string, unknown>(WIN_MAIN_RENDERER_EVENT_NAME.get_data, DATA_KEYS.recommendProfile)
+}
+
 
 export const getSystemFonts = async() => {
   return rendererInvoke<string[]>(CMMON_EVENT_NAME.get_system_fonts).catch(() => {
