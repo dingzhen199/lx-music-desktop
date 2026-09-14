@@ -4,7 +4,8 @@
     <div v-if="!sessionView.active" :class="$style.empty">
       <p v-if="lastErrorText" :class="$style.error">{{ lastErrorText }}</p>
       <p>{{ hasPlaying ? t('explore__ready_tip') : t('explore__no_playing') }}</p>
-      <button :class="[$style.btn, { [$style.disabled]: !hasPlaying }]" :disabled="!hasPlaying" @click="handleStart">
+      <!-- 电台已开时置灰：同值写入不触发 session 层 watch 属设计使然，收台后的恢复路径是切歌自动重开或播放栏开关 -->
+      <button :class="[$style.btn, { [$style.disabled]: !hasPlaying }]" :disabled="!hasPlaying || appSetting['recommend.radio']" @click="handleStart">
         {{ t('explore__start') }}
       </button>
     </div>
@@ -90,9 +91,9 @@
 import { computed, ref, watch } from '@common/utils/vueTools'
 import { useI18n } from '@renderer/plugins/i18n'
 import { playMusicInfo } from '@renderer/store/player/state'
+import { appSetting, updateSetting } from '@renderer/store/setting'
 import {
   applyFeedback,
-  endSession,
   lastAiRankError,
   lastErrorKind,
   lastErrorText,
@@ -102,7 +103,6 @@ import {
   sessionView,
   setInstruction,
   setRadius,
-  startSession,
 } from '@renderer/core/recommend/session'
 import { debounce } from '@common/utils'
 import { groupPathByBatch } from '@renderer/core/recommend/session-core'
@@ -176,16 +176,14 @@ const roleLabel = (role: string): string => {
   }
 }
 
-const handleStart = async() => {
-  try {
-    await startSession()
-  } catch (err) {
-    console.warn('[explore] 开始会话失败', (err as Error).message)
-  }
+// 开始/结束同源于电台开关（D10 双入口单源）：本页只写 recommend.radio，
+// 开台（含收台后空态的 lastErrorText 展示）与收台清场统一由 session 层 watch 响应，不直接调 session
+const handleStart = () => {
+  updateSetting({ 'recommend.radio': true })
 }
 
 const handleEnd = () => {
-  endSession()
+  updateSetting({ 'recommend.radio': false })
 }
 
 const handlePathClick = (id: string | null) => {

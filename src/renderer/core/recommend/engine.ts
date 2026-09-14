@@ -76,9 +76,11 @@ export interface ExploreOptions {
   ai?: AiConfig
   /** 会话锚点覆盖（T-B2 replan 用；缺省取当前播放歌曲）。 */
   anchor?: ExploreAnchor
-  /** 复用起点分析（跳过分析步骤；T-B2 续补沿会话语义，也省一次 LLM 分析）。 */
+  /** 复用起点分析（跳过分析步骤；T-B2 续补沿会话语义，也省一次 LLM 分析）。
+   * 作废语义（D3）：一句话约束变更后调用方不再传本选项，引擎本次自动重新分析（召回方向随新约束换道）。 */
   reuseAnalysis?: TrackAnalysis
-  /** 队列追加模式：top=置顶（默认/首计划），bottom=追加队尾（续补）。 */
+  /** 队列追加模式：bottom=追加队尾（会话路径一律传此值，D6 队尾统一）；
+   * top=置顶仅为默认缺省，保留给 dev 钩子直调 exploreOnce 的无会话手动探索（插队试听旧行为，不参与会话流程）。 */
   appendMode?: 'top' | 'bottom'
   /** 已推荐过的候选 id（续补时避免重复入队）。 */
   excludeIds?: string[]
@@ -532,6 +534,9 @@ export const registerDevHook = (): void => {
     startCollect: startFeatureCollection,
     stopCollect: stopFeatureCollection,
     clearSession,
+    // TT-4（D9/AC7）：只读本地指标快照。透传 data.ts 读档通道，本函数不做归并/计数逻辑；
+    // 动态 import 避免 engine→data 的顶层加载边，快照形状见 session-core.MetricsState
+    metrics: async() => (await import('@renderer/utils/data')).getRecommendMetrics(),
   }
 }
 

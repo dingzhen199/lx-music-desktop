@@ -165,6 +165,7 @@ const defaultSetting: LX.AppSetting = {
 
   'recommend.radius': 35,
   'recommend.autoRefill': true,
+  'recommend.radio': false,
 
 }
 

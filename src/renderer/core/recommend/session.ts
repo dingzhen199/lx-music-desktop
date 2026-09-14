@@ -1,17 +1,23 @@
 /**
- * “从此歌出发”探索会话编排（T-B2 薄层）。
+ * “从此歌出发”探索会话编排（T-B2 薄层）/ 探索电台编排（TT-1）。
  *
  * 职责：创建会话（锚点取当前播放歌曲、AI 配置取设置、初始计划）、
- * 切歌订阅（路径追加 + 队列剩余 <=3 自动续补，含防抖/单飞/失败退避）、反馈、结束。
+ * 切歌订阅（路径追加 + 队列剩余 <=3 自动续补，含防抖/单飞/失败退避）、反馈、结束；
+ * TT-1 电台化：切歌走向统一由 session-core.decideOnSongChange 判定（on-path/start/reanchor/ignore），
+ * 首计划与续补一律队尾入队（D6），同一 run 连续计划最终失败达到上限即收台（D13），
+ * initRecommendRadio 负责电台开关的启动恢复与开关变化响应（D15/D10）；
+ * TT-2：约束变更作废锚点分析（D3）——applyResult 记录分析所用约束快照，续补经 analysisStale 判废后
+ * 不传 reuseAnalysis，引擎自动重新分析、召回方向随新约束换道（快照与 analysisCache 同生命周期）。
  * 状态转移的纯逻辑在 session-core.ts（由 vitest 覆盖）；
  * 本文件依赖播放器状态/事件/引擎，属于集成层，验证方式为 tsc/lint/构建 + 手动冒烟（见 T-B2 报告）。
  */
 
-import { computed, ref } from '@common/utils/vueTools'
+import { computed, ref, watch } from '@common/utils/vueTools'
 import { appSetting } from '@renderer/store/setting'
-import { playMusicInfo, tempPlayList } from '@renderer/store/player/state'
+import { isPlay, playMusicInfo, tempPlayList } from '@renderer/store/player/state'
 import { removeTempPlayList } from '@renderer/store/player/action'
 import { playMusicInfoNow } from '@renderer/core/player'
+import { getRecommendMetrics, saveRecommendMetrics } from '@renderer/utils/data'
 import { exploreOnce } from './engine'
 import type { AiConfig, ExploreAnchor, ExploreOptions, ExploreResult } from './engine'
 import { startFeatureCollection, stopFeatureCollection } from './feature'
@@ -19,17 +25,30 @@ import { sameSong } from './sameSong'
 import type { RankPathInput, TrackAnalysis } from './prompts'
 import {
   RADIUS_DEFAULT,
+  START_RADIO_DEBOUNCE_MS,
+  accumulatePlayTime,
   addRecommendedIds,
+  analysisStale,
   appendToPath,
   applyFeedback as applyFeedbackCore,
+  batchKey,
   buildReplanInstruction,
   computeRefillNeed,
+  createPlayTimeState,
   createSession,
+  decideOnSongChange,
+  hydrateMetrics,
+  readPlayedMs,
+  reanchorSession,
+  recordPlanFailure,
+  recordPlanSuccess,
+  reduceMetrics,
+  shouldEndRun,
   toView,
   updateInstruction as updateInstructionCore,
   updateRadius as updateRadiusCore,
 } from './session-core'
-import type { FeedbackKind, PathBatch, SessionAnchor, SessionPathItem, SessionState, SessionView } from './session-core'
+import type { FeedbackKind, MetricsEvent, MetricsState, PathBatch, PlayTimeState, SessionAnchor, SessionPathItem, SessionState, SessionView } from './session-core'
 
 /** 切歌后自动续补的防抖间隔（毫秒）。 */
 const REFILL_DEBOUNCE_MS = 1200
@@ -48,14 +67,91 @@ const lastErrorKind = ref<'initial' | 'refill' | null>(null)
 const refillState = ref<'idle' | 'refilling' | 'retrying'>('idle')
 
 let analysisCache: TrackAnalysis | null = null
+/** 缓存分析产出时所用的一句话约束快照（st.instruction 原样值，D3 作废判定用；与 analysisCache 同生命周期）。 */
+let analysisInstruction: string | null = null
 let unsubMusicToggled: (() => void) | null = null
 let refillTimer: ReturnType<typeof setTimeout> | null = null
 let retryTimer: ReturnType<typeof setTimeout> | null = null
+// 开台/重锚首计划的防抖计时器（与续补防抖分开：两次切歌各自取消对方的待执行计划）
+let reanchorTimer: ReturnType<typeof setTimeout> | null = null
 // 单飞标记放在对象属性上（eslint require-atomic-updates 配置 allowProperties: true）
 const refillFlight = { inFlight: false }
 let refillRetry = 0
 // 会话代际号：end/start 时自增，在途计划完成后据此识别“已不属于当前会话”并回滚
 let epoch = 0
+
+// ===== TT-4 本地指标（D9/D14）：编排层只在事件点构造事件，计数口径全部在 session-core =====
+/** 播放时长累计器：生命周期 = 单曲目，切歌结算上一首后换新零态（即“清零”动作）。 */
+let playTime: PlayTimeState = createPlayTimeState()
+/** 上一首的 id 与推荐归属（trackEnded 的推荐归属取上一首切换时的 on-path 结论，与 trackStarted 同源）。 */
+let lastSongId: string | null = null
+let lastSongRecommended = false
+/** 指标状态（水合后常驻内存、每次事件后直写落盘；null = 尚未水合）。 */
+let metricsState: MetricsState | null = null
+/**
+ * 指标批次登记的单调序号（稳态撞 key 修复）：批次 key 由（半径/约束/引擎）三元组派生，
+ * 稳态连续续补时三元组不变，裸 batchKey 会让新批登记覆盖旧批、旧批曲目失归属（消费比失真）；
+ * 故登记侧统一追加本序号（`${batchKey}#${seq}`）使每次计划登记唯一。
+ * 随新 run 归零（在 openSession 重置）：重锚属同一 run、不走 openSession，序号跨重锚延续，
+ * run 内登记 key 恒不撞；batchKey 本身不携带序号（它兼作路径分组判定，分组语义不变）。
+ */
+let metricsBatchSeq = 0
+/** 水合完成前到达的事件缓冲（D15 启动恢复的首个 musicToggled 可能早于 IPC 读档返回，不能丢）。 */
+let pendingMetricsEvents: MetricsEvent[] | null = []
+
+/** 指标事件入口：归并入状态后直写落盘（不节流——事件只发生在切歌/反馈/开收台/计划完成点，量级极小）。 */
+const emitMetrics = (event: MetricsEvent): void => {
+  if (metricsState == null) {
+    pendingMetricsEvents?.push(event)
+    return
+  }
+  metricsState = reduceMetrics(metricsState, event)
+  saveRecommendMetrics(metricsState)
+}
+
+/** 启动水合一次：快照宽松归一后，水合前缓冲的事件在旧值上续归并（AC7：重启后可读且随事件增长）。 */
+const hydrateRecommendMetrics = async(): Promise<void> => {
+  const raw = await getRecommendMetrics().catch(() => null)
+  const buffered = pendingMetricsEvents ?? []
+  let next = hydrateMetrics(raw)
+  for (const event of buffered) next = reduceMetrics(next, event)
+  metricsState = next
+  pendingMetricsEvents = null
+  if (buffered.length) saveRecommendMetrics(next)
+}
+
+/** play/pause 只喂时长累计器，不直接产生指标事件（30 秒跳过率取实际播放秒数，不取切歌墙钟间隙）。 */
+const handlePlayForMetrics = (): void => {
+  playTime = accumulatePlayTime(playTime, 'play', Date.now())
+}
+const handlePauseForMetrics = (): void => {
+  playTime = accumulatePlayTime(playTime, 'pause', Date.now())
+}
+
+/**
+ * 切歌指标：先结算上一首的实际播放秒数（trackEnd 收尾含在途分段，暂停区间已被 pause 事件扣除），
+ * 再登记新一首（trackStarted 触发批次消费判定）。本函数只做读取与事件构造，不改动会话状态，
+ * 调用点放在 decideOnSongChange 判定之后、执行分支之前——on-path 归属取自转移前会话，不受影响。
+ */
+const emitSongChangeMetrics = (play: ReturnType<typeof currentMusic>, nextOnPath: boolean): void => {
+  const now = Date.now()
+  if (lastSongId != null) {
+    playTime = accumulatePlayTime(playTime, 'trackEnd', now)
+    emitMetrics({
+      type: 'trackEnded',
+      recommendedId: lastSongRecommended ? lastSongId : null,
+      playedSeconds: readPlayedMs(playTime, now) / 1000,
+    })
+  }
+  // 清零换曲：新一首从 0 起计
+  playTime = createPlayTimeState()
+  lastSongId = play?.id != null ? String(play.id) : null
+  lastSongRecommended = nextOnPath
+  if (lastSongId != null) emitMetrics({ type: 'trackStarted', id: lastSongId, recommended: nextOnPath })
+  // 自然接续切歌常无独立 pause/play 事件对，播放中切歌先开口子；随后播放器的 play 事件会被累计器
+  // 按“重复 play 重新锚定”吸收，不会重复计时
+  if (isPlay.value) playTime = accumulatePlayTime(playTime, 'play', now)
+}
 
 /** 当前播放歌曲（含下载列表项兼容），用于锚点/切歌判定。 */
 const currentMusic = (): { id: string, singer: string, name: string, album: string, pic?: string | null } | null => {
@@ -69,6 +165,17 @@ const currentMusic = (): { id: string, singer: string, name: string, album: stri
     name: info.name ?? '',
     album: info.meta?.albumName ?? '',
     pic: info.meta?.picUrl ?? null,
+  }
+}
+
+/** 当前播放歌曲 → 会话锚点（开台/重锚/startSession 共用的锚点构造口径）。 */
+const toAnchor = (play: NonNullable<ReturnType<typeof currentMusic>>): SessionAnchor => {
+  return {
+    id: play.id,
+    artist: play.singer || '(未知艺人)',
+    title: play.name || '(未知曲目)',
+    album: play.album,
+    pic: play.pic ?? null,
   }
 }
 
@@ -154,16 +261,22 @@ const buildExploreOptions = (mode: 'initial' | 'refill'): ExploreOptions | null 
     id: st.anchor.id ?? undefined,
     album: st.anchor.album,
   }
+  // D3/AC3：一句话约束变更即作废缓存的锚点分析——判废的续补不传 reuseAnalysis，引擎自动重新分析、
+  // 召回方向随新约束换道；约束未变沿用首计划分析（续补与首计划解读同一首歌）。
+  // console.warn 为 AC3 冒烟的控制台可观察点（变化后的批次组头 instruction 为页面可观察点）
+  const analysisDiscarded = mode === 'refill' && analysisStale(st, analysisInstruction)
+  if (analysisDiscarded) console.warn('[session] 一句话约束已变更，作废缓存的锚点分析，本次计划重新分析')
   return {
     anchor,
     ai: buildAiConfig(),
     radius: st.radius,
     instruction: [st.instruction, buildReplanInstruction(st)].filter(Boolean).join('；'),
     excludes: '',
-    appendMode: mode === 'refill' ? 'bottom' : 'top',
+    // 队尾统一（D6/AC2）：首计划与续补一律追加队尾，不再置顶插队到用户手动排队的歌之前
+    appendMode: 'bottom',
     ...(mode === 'refill'
       ? {
-          reuseAnalysis: analysisCache ?? undefined,
+          reuseAnalysis: analysisDiscarded ? undefined : (analysisCache ?? undefined),
           excludeIds: [...st.recommendedIds],
           // 已推荐/已播曲目跨批次排除（artist/title 按 sameSong，防同曲不同 id 变体重复入队）
           excludeTracks: st.path.map(p => ({ artist: p.artist, title: p.title })),
@@ -181,7 +294,8 @@ const applyResult = (result: ExploreResult, batch: Pick<PathBatch, 'radius' | 'i
   const st = state.value
   if (!st) return
   const pathBatch: PathBatch = { ...batch, engine: result.engine }
-  let next = addRecommendedIds(st, result.candidates.map(c => c.id).filter((id): id is string => id != null))
+  // 任一计划成功即清零连续失败计数（D13：失败计数只在连续最终失败时累计）
+  let next = recordPlanSuccess(addRecommendedIds(st, result.candidates.map(c => c.id).filter((id): id is string => id != null)))
   for (const c of result.candidates) {
     next = appendToPath(next, {
       id: c.id,
@@ -202,6 +316,19 @@ const applyResult = (result: ExploreResult, batch: Pick<PathBatch, 'radius' | 'i
   // 起点分析只为当前会话跑一次（LLM 分析贵且非确定），续补通过 reuseAnalysis 沿用，
   // 保证续补与首计划解读同一首歌；状态更新后再缓存，失败路径不会留下半成品分析。
   analysisCache = result.rawAnalysis
+  // 快照记录本次计划实际使用的约束：batch.instruction 取自 plan() 发起时的会话快照（stateAtPlan）。
+  // 误取计划完成时点的 st.instruction 会把“旧约束产出的分析”误标为新约束，下一轮续补将漏判作废（D3）
+  analysisInstruction = batch.instruction
+  // TT-4 续补消费比（D9）：登记本次计划批次与 batch→ids 映射，
+  // 同批任一曲目后续进入已播（trackStarted）即记该批被消费一次（一批仅记一次的口径在 reducer 内）。
+  // 登记 key = batchKey 追加每 run 单调序号（见 metricsBatchSeq 注记）：稳态连续续补不再覆盖旧批登记
+  const registrationKey = batchKey(pathBatch)
+  metricsBatchSeq++
+  emitMetrics({
+    type: 'refillPlanned',
+    batchKey: registrationKey == null ? null : `${registrationKey}#${metricsBatchSeq}`,
+    ids: result.candidates.map(c => c.id),
+  })
 }
 
 /** 回滚已入队的候选：按返回 id 从队列末尾向前删除（索引随删除变化，从后往前安全）。 */
@@ -241,6 +368,7 @@ const plan = async(mode: 'initial' | 'refill'): Promise<void> => {
     lastError.value = message
     lastErrorKind.value = mode
     if (mode === 'refill' && refillRetry < REFILL_MAX_RETRY) {
+      // 重试中不算“最终失败”（D13）：重试耗尽或 initial 失败才计入连续失败
       refillRetry++
       refillState.value = 'retrying'
       const delay = REFILL_RETRY_BASE_MS * refillRetry
@@ -249,6 +377,17 @@ const plan = async(mode: 'initial' | 'refill'): Promise<void> => {
       }, delay)
     } else {
       refillState.value = 'idle'
+      const st = state.value
+      if (st) {
+        state.value = recordPlanFailure(st)
+        if (shouldEndRun(state.value)) {
+          // 同一 run 连续计划最终失败达到上限 → 收台（D13/AC9）：清本 run 队列残留后结束会话；
+          // 电台仍为开时 endSession 保留切歌订阅，下一首切歌会以新歌重新开台
+          console.warn('[session] 同一 run 连续计划最终失败达到上限，收台')
+          removeTempByIds(st.recommendedIds)
+          endSession()
+        }
+      }
     }
   } finally {
     // 只有本代际的计划才有权释放单飞标记（旧代际的 finally 不得影响新会话）
@@ -266,51 +405,138 @@ const scheduleRefill = (): void => {
   }, REFILL_DEBOUNCE_MS)
 }
 
+/** 开台/重锚首计划防抖（快速连切只保留最后一次切歌的计划，防切歌风暴连发 LLM 调用；量级与续补防抖一致）。 */
+const scheduleRadioPlan = (): void => {
+  if (!state.value) return
+  if (reanchorTimer) clearTimeout(reanchorTimer)
+  reanchorTimer = setTimeout(() => {
+    reanchorTimer = null
+    // 防抖窗口内会话可能已被收台（endSession 会清本计时器，此处再兜底一次）
+    if (!state.value) return
+    void plan('initial')
+  }, START_RADIO_DEBOUNCE_MS)
+}
+
+/** 清空计划上下文（错误/结果/分析缓存及其约束快照）并推进代际：开台与重锚共用的“开新台”动作。 */
+const resetPlanContext = (): void => {
+  lastError.value = null
+  lastResult.value = null
+  lastErrorKind.value = null
+  analysisCache = null
+  analysisInstruction = null
+  refillRetry = 0
+  epoch++
+}
+
 /**
- * 切歌处理：
- * 1. 新歌属于本会话推荐 → 记入路径（已听）；
- * 2. 队列剩余 <= 阈值 且用户仍在推荐路径上 → 自动续补。
- * 用户手动切到非推荐歌曲（会清空稍后播放队列）时不自动续补，避免抢占播放权。
+ * 开新台公共序列（startRadioSession / startSession 共用）：
+ * 清计划上下文 → 按设置默认半径建全新 run → 建立切歌订阅 → 启动特征采集
+ * （随会话生命周期让特征桶在会话播放中持续积累，此前仅 dev 钩子可达、生产路径从未启动）→ 记 run 开始指标；
+ * 指标批次登记序号随新 run 归零（重锚属同一 run、复用 reanchorSession 路径，不经由本函数）。
+ * 两入口各自的差异留在外层：startRadioSession 防抖发起首计划（切歌吸抖），startSession 幂等后直接 await 首计划。
+ */
+const openSession = (anchor: SessionAnchor): void => {
+  resetPlanContext()
+  metricsBatchSeq = 0
+  state.value = createSession(anchor, { radius: appSetting['recommend.radius'] })
+  subscribeMusicToggled()
+  startFeatureCollection()
+  emitMetrics({ type: 'runStarted', ts: Date.now() })
+}
+
+/** 电台开台（当前无会话）：以当前歌为锚点建会话并防抖发起首计划（decideOnSongChange 的 start 分支）。 */
+const startRadioSession = (play: NonNullable<ReturnType<typeof currentMusic>>): void => {
+  openSession(toAnchor(play))
+  scheduleRadioPlan()
+}
+
+/**
+ * 跟歌重锚（decideOnSongChange 的 reanchor 分支）：清本会话队列残留（不动用户手动排队的歌）→
+ * 收旧台 → 以新歌开新台（run 级字段与连续失败计数沿用，见 session-core.reanchorSession）→ 防抖发起首计划。
+ * 复用 startSession 的“清残留→endSession→开新会话→plan(initial)”结构。
+ */
+const reanchorRadioSession = (prev: SessionState, clearIds: string[], play: NonNullable<ReturnType<typeof currentMusic>>): void => {
+  removeTempByIds(clearIds)
+  // keepRunAlive：重锚是同一 run 内的“收旧台开新台”（D7 run 级字段沿用），run 指标不结算、不新计
+  endSession({ keepRunAlive: true })
+  resetPlanContext()
+  state.value = reanchorSession(prev, toAnchor(play))
+  subscribeMusicToggled()
+  startFeatureCollection()
+  scheduleRadioPlan()
+}
+
+/**
+ * 切歌处理：走向由 session-core.decideOnSongChange 统一判定（本层只执行，不含判定逻辑）：
+ * - on-path：新歌属于本会话推荐 → 记入路径（已听）；队列剩余 <= 阈值时自动续补；
+ * - start：电台开且无会话 → 以当前歌开台（含重启恢复经 playList 派发的首个 musicToggled，D15）；
+ * - reanchor：跟歌重锚（D2），该分支永远独立于任何队列清空语义（D13/B7-C1：重锚优先）；
+ * - ignore：不动作（电台关且不在路径上时，用户切到非推荐歌曲不会自动续补，避免抢占播放权）。
  */
 const handleMusicToggled = (): void => {
   const st = state.value
   const play = currentMusic()
-  if (!st || !play) return
-  const onPath = st.recommendedIds.includes(play.id)
-  if (onPath) {
-    // 与 appendToPath 的合并语义一致：同 id 或同曲（sameSong）都视为当前路径条目
-    const existing = st.path.find(p => p.id === play.id || sameSong(p, { artist: play.singer, title: play.name }))
-    state.value = appendToPath(st, {
-      id: play.id,
-      artist: play.singer,
-      title: play.name,
-      album: play.album,
-      reason: existing?.reason ?? '',
-      journeyRole: existing?.journeyRole ?? 'open',
-      state: 'played',
-      // 切歌回写时带回既有批次快照（appendToPath 也会兜底继承，双保险不丢分组）
-      batch: existing?.batch,
-      // 已播条目可能已离开稍后播放队列，保留 musicInfo 供路径点击重新入队播放
-      musicInfo: existing?.musicInfo,
-    })
+  // SongChangeSong 已裁剪为判定实际消费的 id；宽对象经变量透传（结构类型兼容），不再逐字段复制
+  const decision = decideOnSongChange(st, {
+    radioEnabled: appSetting['recommend.radio'],
+    song: play,
+  })
+  // TT-4 指标：先结算上一首再走执行分支——结算只读转移前的会话/播放状态，
+  // on-path 归属判定（本函数内不做状态转移）不受后续分支影响
+  emitSongChangeMetrics(play, decision.kind === 'on-path')
+  switch (decision.kind) {
+    case 'start':
+      if (play) startRadioSession(play)
+      return
+    case 'reanchor':
+      if (st && play) reanchorRadioSession(st, decision.clearIds, play)
+      return
+    case 'on-path': {
+      if (!st || !play) return
+      // 与 appendToPath 的合并语义一致：同 id 或同曲（sameSong）都视为当前路径条目
+      const existing = st.path.find(p => p.id === play.id || sameSong(p, { artist: play.singer, title: play.name }))
+      state.value = appendToPath(st, {
+        id: play.id,
+        artist: play.singer,
+        title: play.name,
+        album: play.album,
+        reason: existing?.reason ?? '',
+        journeyRole: existing?.journeyRole ?? 'open',
+        state: 'played',
+        // 切歌回写时带回既有批次快照（appendToPath 也会兜底继承，双保险不丢分组）
+        batch: existing?.batch,
+        // 已播条目可能已离开稍后播放队列，保留 musicInfo 供路径点击重新入队播放
+        musicInfo: existing?.musicInfo,
+      })
+      if (!appSetting['recommend.autoRefill']) return
+      if (computeRefillNeed(outstandingRecommendedIds(st))) scheduleRefill()
+      break
+    }
+    default:
+      // ignore
   }
-  if (!appSetting['recommend.autoRefill']) return
-  if (onPath && computeRefillNeed(outstandingRecommendedIds(st))) scheduleRefill()
 }
 
 const subscribeMusicToggled = (): void => {
   if (unsubMusicToggled) return
   window.app_event.on('musicToggled', handleMusicToggled)
+  // TT-4 时长累计的 play/pause 订阅与切歌订阅同生命周期（所有权一致归“电台开关或活跃会话”，
+  // 见 endSession）：指标事件全部由切歌/反馈/开收台触发，切歌退订后保留时长订阅只会积累
+  // 永不被结算的状态；订阅保留期间的空转成本仅每次事件两次函数调用，可忽略
+  window.app_event.on('play', handlePlayForMetrics)
+  window.app_event.on('pause', handlePauseForMetrics)
   unsubMusicToggled = () => {
     window.app_event.off('musicToggled', handleMusicToggled)
+    window.app_event.off('play', handlePlayForMetrics)
+    window.app_event.off('pause', handlePauseForMetrics)
   }
 }
 
 /**
- * 开始会话：锚点取当前播放歌曲，按默认设置做初始计划（置顶入队）。
+ * 开始会话：锚点取当前播放歌曲，按默认设置做初始计划（D6 队尾统一：与续补一样追加队尾入队）。
  * 幂等判定：会话存在且锚点仍是当前播放歌曲 → 不重启（供播放栏按钮直接跳转页面）；
  * 锚点已不是当前歌（用户切歌后主动再点“从此歌出发”）→ 旧推荐不清掉的话仍留在队列
- * 和新会话混在一起，故先移除旧会话入队的歌曲，再结束旧会话、按新歌重新开始。
+ * 和新会话混在一起，故先移除旧会话入队的歌曲，再结束旧会话、按新歌重新开始（手动起点会话幂等语义保留，D13）。
  * 只有用户显式点击本函数才会重开；切歌/自动续补等内部流程不经过它，不会误判重开。
  */
 export const startSession = async(): Promise<void> => {
@@ -324,23 +550,7 @@ export const startSession = async(): Promise<void> => {
     removeTempByIds(st.recommendedIds)
     endSession()
   }
-  lastError.value = null
-  lastResult.value = null
-  lastErrorKind.value = null
-  analysisCache = null
-  refillRetry = 0
-  epoch++
-  const anchor: SessionAnchor = {
-    id: play.id,
-    artist: play.singer || '(未知艺人)',
-    title: play.name || '(未知曲目)',
-    album: play.album,
-    pic: play.pic ?? null,
-  }
-  state.value = createSession(anchor, { radius: appSetting['recommend.radius'] })
-  subscribeMusicToggled()
-  // 随会话生命周期启动特征采集：让特征桶在会话播放中持续积累（此前仅 dev 钩子可达，生产路径从未启动）
-  startFeatureCollection()
+  openSession(toAnchor(play))
   // 初始计划失败时保留会话与错误信息：用户可调整距离/约束（会触发续补重试）或直接结束
   await plan('initial')
 }
@@ -351,6 +561,8 @@ export const applyFeedback = (kind: FeedbackKind): void => {
   if (!st) return
   const play = currentMusic()
   state.value = applyFeedbackCore(st, kind, play?.singer ?? '')
+  // TT-4 far/good 计数（D9）：只统计有会话时的有效反馈（上方守卫已保证）
+  emitMetrics({ type: 'feedback', kind })
   // 反馈是显式用户动作：始终触发一次续补让改动可感知（不受 autoRefill 开关限制）
   scheduleRefill()
 }
@@ -398,8 +610,17 @@ export const playPathItem = (id: string | null): void => {
   console.warn('[session] 路径条目缺少可播放的音乐信息', id)
 }
 
-/** 结束会话：清空状态与订阅（停止路径追加与自动续补）。 */
-export const endSession = (): void => {
+/**
+ * 结束会话（收台）：清空状态；订阅所有权归“电台开关或活跃会话”——
+ * 电台仍为开时保留切歌订阅（收台后下一首切歌会以新歌重新开台，D15），电台关时退订。
+ * 收台 = run 边界终点（D7/AC4）：会话、分析缓存及其约束快照全部清空，之后重开
+ * （startSession / 开关恢复 / 下一首切歌开台）一律经 createSession 建全新 run、
+ * 半径回落设置默认，不沿用上一 run 的任何策略字段（run 级沿用只发生在重锚 reanchorSession）。
+ * options.keepRunAlive：重锚内部的“收旧台”专用——重锚属同一 run（D7），run 指标不结算；
+ * 其余收台路径（显式关闭/连续失败收台/锚点变更重开前的清场）一律结算 runEnded。
+ */
+export const endSession = (options?: { keepRunAlive?: boolean }): void => {
+  if (!options?.keepRunAlive) emitMetrics({ type: 'runEnded', ts: Date.now() })
   if (refillTimer) {
     clearTimeout(refillTimer)
     refillTimer = null
@@ -408,8 +629,14 @@ export const endSession = (): void => {
     clearTimeout(retryTimer)
     retryTimer = null
   }
-  unsubMusicToggled?.()
-  unsubMusicToggled = null
+  if (reanchorTimer) {
+    clearTimeout(reanchorTimer)
+    reanchorTimer = null
+  }
+  if (!appSetting['recommend.radio']) {
+    unsubMusicToggled?.()
+    unsubMusicToggled = null
+  }
   stopFeatureCollection()
   // 代际自增：使在途计划完成时识别为旧会话并回滚，不污染新会话
   epoch++
@@ -419,6 +646,38 @@ export const endSession = (): void => {
   refillFlight.inFlight = false
   refillRetry = 0
   analysisCache = null
+  analysisInstruction = null
+}
+
+/**
+ * 电台开关初始化（渲染进程启动链调用一次；调用点必须先于 useDataInit 完成，D15）：
+ * - recommend.radio 持久为开 → 立即建立切歌订阅（不重复订阅，subscribeMusicToggled 幂等）：
+ *   不立即开台，开台时机是订阅建立后的首个 musicToggled
+ *   （含启动恢复阶段 useDataInit 经 playList 派发的那一个）；
+ * - 开关变化同源响应：开 → 建立订阅，有播放中的歌时立即以当前歌开台（无则等首切歌）；
+ *   关 → 收台并退订（无会话时只摘掉启动恢复建立的订阅）。
+ */
+export const initRecommendRadio = (): void => {
+  // TT-4 指标水合（D14/AC7）：启动时读档归一入内存；水合返回前到达的事件经缓冲在旧值上续归并
+  void hydrateRecommendMetrics()
+  watch(() => appSetting['recommend.radio'], (enabled) => {
+    if (enabled) {
+      subscribeMusicToggled()
+      if (currentMusic()) {
+        void startSession().catch(err => {
+          console.warn('[session] 电台开台失败', (err as Error).message)
+        })
+      }
+    } else if (state.value) {
+      // 收台含清场（TT-1：播放栏开关「关 = 清场收台」）：本 run 的队列残留须随会话一并撤除，口径与连续失败收台一致
+      removeTempByIds(state.value.recommendedIds)
+      endSession()
+    } else {
+      unsubMusicToggled?.()
+      unsubMusicToggled = null
+    }
+  })
+  if (appSetting['recommend.radio']) subscribeMusicToggled()
 }
 
 export { lastErrorKind, refillState }

@@ -15,6 +15,7 @@ import usePlayer from './usePlayer'
 import useSettingSync from './useSettingSync'
 import { useRouter } from '@common/utils/vueRouter'
 import handleListAutoUpdate from './listAutoUpdate'
+import { initRecommendRadio } from '@renderer/core/recommend/session'
 
 
 export default () => {
@@ -38,6 +39,10 @@ export default () => {
 
   useUpdate()
   useSettingSync()
+
+  // 电台启动恢复（D15）：必须在同步段完成切歌订阅注册，先于下方 getEnvParams().then 里的 initData
+  // （useDataInit 恢复上次播放会经 playList 派发首个 musicToggled，错过注册点首事件就会被吞掉）
+  initRecommendRadio()
 
   void getEnvParams().then(envParams => {
     // 移除代理相关的环境变量设置，防止请求库自动应用它们

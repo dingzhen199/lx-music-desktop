@@ -31,6 +31,8 @@ dd
       span.gap-left {{ appSetting['recommend.radius'] }}
     .p
       base-checkbox(id="setting_recommend_auto_refill" :model-value="appSetting['recommend.autoRefill']" :label="$t('setting__recommend_auto_refill')" @update:model-value="updateSetting({ 'recommend.autoRefill': $event })")
+    .p
+      base-checkbox(id="setting_recommend_radio" :model-value="appSetting['recommend.radio']" :label="$t('setting__recommend_radio')" @update:model-value="updateSetting({ 'recommend.radio': $event })")
 </template>
 
 <script>

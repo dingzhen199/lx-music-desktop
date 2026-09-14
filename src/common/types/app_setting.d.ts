@@ -725,6 +725,11 @@ declare global {
        * 推荐会话队列剩余不多时是否自动续补
        */
       'recommend.autoRefill': boolean
+
+      /**
+       * 是否开启探索电台（跟随切歌自动以当前歌重锚开台，推荐追加稍后播放队尾；持久开关，重启后为开时首次播放自动开台）
+       */
+      'recommend.radio': boolean
     }
   }
 
