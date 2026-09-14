@@ -153,10 +153,11 @@ const emitSongChangeMetrics = (play: ReturnType<typeof currentMusic>, nextOnPath
       recommendedId: lastSongRecommended ? lastSongId : null,
       playedSeconds,
     })
-    // TP-3（D11/AC3）：推荐曲 30 秒内被切走 → 回注画像 skips 信号；非推荐曲跳过不入画像；
+    // TP-3（D11/AC3）：推荐曲 30 秒内被切走 → 回注画像 skips 信号（带播放秒数，入口经 isCompleteListen
+    // 与 completes 互斥否决短曲双计）；非推荐曲跳过不入画像；
     // 判定时长口径与 metrics 的 skippedUnder30s 同源（实际播放秒数，非切歌墙钟间隙）
     if (lastSongRecommended && playedSeconds < SKIP_JUDGE_SECONDS) {
-      recordRecommendedSkip({ id: lastSongId, artist: lastSongArtist, title: lastSongTitle })
+      recordRecommendedSkip({ id: lastSongId, artist: lastSongArtist, title: lastSongTitle, playedSeconds })
     }
   }
   // 清零换曲：新一首从 0 起计

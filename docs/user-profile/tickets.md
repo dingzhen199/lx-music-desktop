@@ -86,3 +86,10 @@ TP-6 blocked by TP-3 + TP-4 + TP-5（收尾）
 - `e2e/ai.js` 未执行：`e2e/README.md` 已声明其 T-B1/T-B2 断言过时不可作回归依据（适配单独立项）；本分支 `e2e/` 目录零改动（mockLlm 面未触碰，`git diff d0368787..HEAD -- e2e/` 为空）。
 - 画像集成冒烟（一次性脚本，未提交）：生产构建 + 临时 profile：`player_music_love` 快捷键收藏播放中歌曲两次 → `data.json` 的 `recommendProfile` = loves 1（重复收藏幂等生效）、artistCounts 含该艺人 love+1、events 恰一条 love、summary 未达阈值矜持 null；全程无页面脚本错误。
 - `docs/explore-radio/spec.md` D4/非目标注记、ADR 0001 superseded 指针均已补齐。
+
+**整分支终审后复核修复（2026-09-14，4 minor + 1 修复残留）：**
+- 短曲双计互斥：session `recordRecommendedSkip` 回注携带 `playedSeconds`；profile 入口先以 `isCompleteListen(playedSeconds, lastSettledDurationSec)` 否决——时长取本层自存的"上一首时长"（playerLoadeddata 锚定、不随切歌清零），与两模块 musicToggled 订阅的执行顺序无关；时长未知（0）恒不否决、保守放行（D9 同源口径）。completes 判定仍用 `durationSnapshotSec`。
+- 幂等不吞背书：`isDuplicatedLove` 提为导出谓词 `isDuplicateLoveSignal`；`emitSignal` 对被幂等吸收的 love 仍广播背书信号（不落盘不触发摘要），补齐"取消后再收藏本台推荐曲进 positiveArtists 并续补"链路。
+- 批量收藏单次落盘：`handleLoveListMusicsAdded` 循环经模块内 `mergeSignal` 归并 + 逐条广播（被吸收 love 同广播），有真实变化才单次落盘 + 单次摘要检查（summaryDue 用归并后最终状态），N 次 save_data 收敛为一次。
+- 空曲名不受幂等保护的口径注释补齐（sameSong 空 title 恒否，保守承接边界）。
+- 测试：`isDuplicateLoveSignal` 谓词新增 3 例；profile-core 57 例、全量 435 例全绿。

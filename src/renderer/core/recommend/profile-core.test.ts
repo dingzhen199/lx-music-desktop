@@ -20,6 +20,7 @@ import {
   decideEndorsement,
   hydrateProfile,
   isCompleteListen,
+  isDuplicateLoveSignal,
   localBonus,
   reduceProfileSignal,
   summaryDue,
@@ -218,6 +219,34 @@ describe('reduceProfileSignal - love 幂等（同曲重复收藏不产生重复�
     expect(state.events).toHaveLength(4)
     expect(state.artistCounts['陈奕迅']).toEqual({ love: 0, complete: 2, skip: 0 })
     expect(state.artistCounts['噪音艺人']).toEqual({ love: 0, complete: 0, skip: 2 })
+  })
+})
+
+describe('isDuplicateLoveSignal - 收藏幂等谓词（reducer 幂等判定与编排层背书广播共用口径）', () => {
+  it('事件缓冲已有同曲 love 时为真（含变体写法）；不同曲为否', () => {
+    // arrange
+    const state = reduceProfileSignal(createProfileState(), { kind: 'love', artist: 'Eason Chan', title: ' 富士山下 ' })
+    // act & assert
+    expect(isDuplicateLoveSignal(state, { kind: 'love', artist: 'eason chan', title: '富士山下' })).toBe(true)
+    expect(isDuplicateLoveSignal(state, { kind: 'love', artist: '陈奕迅', title: '淘汰' })).toBe(false)
+  })
+
+  it('kind 非 love 恒否（complete/skip 的重复信号是合法证据，不受幂等保护）', () => {
+    // arrange
+    const state = reduceProfileSignal(createProfileState(), loveSignal('陈奕迅', { title: '富士山下' }))
+    // act & assert
+    expect(isDuplicateLoveSignal(state, { kind: 'complete', artist: '陈奕迅', title: '富士山下' })).toBe(false)
+    expect(isDuplicateLoveSignal(state, { kind: 'skip', artist: '陈奕迅', title: '富士山下' })).toBe(false)
+  })
+
+  it('空艺人/空状态/空信号为否；空曲名不受幂等保护（sameSong 对空 title 恒否，保守承接边界）', () => {
+    // arrange：含空曲名 love 事件的状态
+    const state: ProfileState = { ...createProfileState(), events: [{ kind: 'love', artist: '陈奕迅', title: '' }] }
+    // act & assert
+    expect(isDuplicateLoveSignal(state, loveSignal(''))).toBe(false)
+    expect(isDuplicateLoveSignal(null, loveSignal('陈奕迅', { title: '富士山下' }))).toBe(false)
+    expect(isDuplicateLoveSignal(state, null)).toBe(false)
+    expect(isDuplicateLoveSignal(state, { kind: 'love', artist: '陈奕迅', title: '' })).toBe(false)
   })
 })
 

@@ -6,7 +6,7 @@
  * 收藏事件桥订阅（loveListMusicsAdded，来源是 listMusicAdd 去重后实际新增或列表未加载时的原始入参发射；重复收藏的幂等由 reducer 同曲归一兜底，D10/D13）、
  * 切歌结算听完信号（isCompleteListen，时长快照锚定 playerLoadeddata——切歌点 maxPlayTime
  * 恒已被清零，不可作快照点，D9）、onProfileSignal 信号广播注册表（session 侧背书订阅，D11）、
- * recordRecommendedSkip 主动入口（推荐曲 <30s 跳过由 session 结算后回注，TP-3 接线）、
+ * recordRecommendedSkip 主动入口（推荐曲 <30s 跳过由 session 结算后回注，入口经 isCompleteListen 与 completes 互斥否决短曲双计，TP-3 接线）、
  * 画像落盘（data.ts recommendProfile 读写对，启动水合一次、事件直写不节流，量级小，D8）、
  * LLM 增量摘要（TP-5/D7：summaryDue 命中且启用 AI 且有 Key 时 fire-and-forget 重写，在途单飞、失败保旧）。
  * 判定与计数口径全部在 profile-core（纯函数，vitest 覆盖）；本文件不 import session（D11 单向依赖），
@@ -21,7 +21,7 @@ import type { RecommendLlmProtocol } from '@common/recommendation'
 import { llmComplete } from './llm'
 import { accumulatePlayTime, createPlayTimeState, readPlayedMs } from './session-core'
 import type { PlayTimeState } from './session-core'
-import { SUMMARY_MAX_CHARS, buildSummaryPrompt, hydrateProfile, isCompleteListen, reduceProfileSignal, summaryDue } from './profile-core'
+import { SUMMARY_MAX_CHARS, buildSummaryPrompt, hydrateProfile, isCompleteListen, isDuplicateLoveSignal, reduceProfileSignal, summaryDue } from './profile-core'
 import type { ProfileSignal, ProfileState } from './profile-core'
 
 /** 画像状态（水合后常驻内存、每次有效信号后直写落盘；null = 尚未水合）。 */
@@ -56,20 +56,36 @@ const broadcastSignal = (signal: ProfileSignal): void => {
 }
 
 /**
- * 信号入口：归并入状态后直写落盘（不节流——事件只发生在切歌结算/收藏/跳过回注点，量级极小）并对外广播；
- * 垃圾信号（reducer 原样返回）不落盘不广播。水合未完成时缓冲，待水合后统一续归并（不广播——启动竞态窗口内
- * 尚无可成型的背书订阅方，口径同 session.ts 指标水合缓冲）。
+ * 单条信号归并（emitSignal 单发与收藏批处理共用）：
+ * - 水合未完成时入缓冲（待水合后续归并、不广播——启动竞态窗口内尚无可成型的背书订阅方，口径同 session.ts 指标水合缓冲）；
+ * - 垃圾信号（reducer 原样返回）不动作；
+ * - 被幂等吸收的合法 love（isDuplicateLoveSignal 命中）：计数/事件不增，但仍广播——session 背书链依赖
+ *   信号到达（取消后再收藏本台推荐曲须进 positiveArtists 并续补，AC1）；幂等吸收与背书广播解耦无副作用
+ *   （applyFeedbackCore 的 pushArtist 去重、scheduleRefill 防抖）；
+ * - 广播在此完成；落盘与摘要检查交回调用方按频次收敛（单发直写 / 批量单次）。
+ * 返回是否有真实状态变化（调用方据此决定落盘与摘要检查）。
  */
-const emitSignal = (signal: ProfileSignal): void => {
+const mergeSignal = (signal: ProfileSignal): boolean => {
   if (profileState == null) {
     pendingSignals?.push(signal)
-    return
+    return false
   }
   const next = reduceProfileSignal(profileState, signal)
-  if (next === profileState) return
+  if (next === profileState) {
+    if (isDuplicateLoveSignal(profileState, signal)) broadcastSignal(signal)
+    return false
+  }
   profileState = next
-  saveRecommendProfile(next)
   broadcastSignal(signal)
+  return true
+}
+
+/** 信号入口：归并广播（口径见 mergeSignal）后直写落盘（不节流——事件只发生在切歌结算/收藏/跳过回注点，量级极小）。 */
+const emitSignal = (signal: ProfileSignal): void => {
+  if (!mergeSignal(signal)) return
+  const st = profileState
+  if (st == null) return
+  saveRecommendProfile(st)
   // TP-5（D7）：每次正向信号归并落盘后检查一次摘要重写；skip 不构成正向增量，不查
   if (signal.kind === 'love' || signal.kind === 'complete') maybeRewriteSummary()
 }
@@ -152,6 +168,14 @@ const safeHandle = <T extends unknown[]>(handler: (...args: T) => void): (...arg
 let playTime: PlayTimeState = createPlayTimeState()
 /** 当前曲目时长快照（秒；playerLoadeddata 锚定，未知为 0——isCompleteListen 对未知时长恒不判定，D9）。 */
 let durationSnapshotSec = 0
+/**
+ * 最近成功加载元数据曲目的时长（秒；与 durationSnapshotSec 同源锚定 playerLoadeddata，但不随切歌清零）。
+ * 只服务 recordRecommendedSkip 的短曲双计互斥否决（不影响 completes 判定——completes 仍用 durationSnapshotSec）：
+ * 本层自存“上一首时长”，session 的 skip 回注无论在 profile 的切歌结算之前还是之后到达，读到的都是
+ * 上一首的时长——与两个模块 musicToggled 订阅的执行顺序无关（注册顺序只影响 durationSnapshotSec 的读取时点，
+ * 故不复用它）。启动后首曲之前/从未成功加载元数据时为 0 → 恒不否决、保守放行 skip（spec D9“未知不判定听完”的同源口径）。
+ */
+let lastSettledDurationSec = 0
 
 /** 上一首曲目信息（切歌时结算上一首用；推荐曲跳过判定不在本层——由 session 经 recordRecommendedSkip 回注）。 */
 interface LastTrack {
@@ -186,7 +210,11 @@ const handlePause = safeHandle(() => {
  *  顺序前提：emit 为订阅序同步派发，本读取依赖 usePlayProgress 先于本模块注册（useApp/index.ts 中 usePlayer 在 initRecommendProfile 之前）。 */
 const handlePlayerLoadeddata = safeHandle(() => {
   const duration = Number(playProgress.maxPlayTime)
-  durationSnapshotSec = Number.isFinite(duration) && duration > 0 ? duration : 0
+  const snapped = Number.isFinite(duration) && duration > 0 ? duration : 0
+  durationSnapshotSec = snapped
+  // 自存“上一首时长”供 skip 互斥否决（见 lastSettledDurationSec 注记）：元数据到达必早于下一次切歌派发，
+  // 两种订阅顺序下回注时点读到的都是本首（即将被结算为“上一首”）的时长；垃圾值写 0，恒不否决
+  lastSettledDurationSec = snapped
 })
 
 /**
@@ -209,19 +237,36 @@ const handleMusicToggled = safeHandle(() => {
   if (lastTrack != null && isPlay.value) playTime = accumulatePlayTime(playTime, 'play', now)
 })
 
-/** 收藏桥订阅：「我喜欢」实际新增的每首曲目各记一次 love 信号（去重与触发范围由发送侧 listMusicAdd 保证）。 */
+/**
+ * 收藏桥订阅：「我喜欢」实际新增（或列表未加载时的原始入参发射）的每首曲目各记一次 love 信号
+ * （去重与触发范围由发送侧 listMusicAdd 保证）。
+ * 批处理动机（sync/整单合入的写放大）：循环只做归并+逐条广播（被幂等吸收的 love 同口径广播，与 emitSignal 一致），
+ * 循环结束后有真实变化才单次落盘 + 单次摘要检查——N 首合入从 N 次 save_data IPC 同步写收敛为一次。
+ */
 const handleLoveListMusicsAdded = safeHandle((musicInfos: LX.Music.MusicInfo[]) => {
+  let changed = false
   for (const info of musicInfos ?? []) {
-    emitSignal({ kind: 'love', id: info?.id, artist: info?.singer, title: info?.name })
+    if (mergeSignal({ kind: 'love', id: info?.id, artist: info?.singer, title: info?.name })) changed = true
   }
+  if (!changed) return
+  const st = profileState
+  if (st == null) return
+  saveRecommendProfile(st)
+  maybeRewriteSummary()
 })
 
 /**
  * 推荐曲跳过主动入口（TP-2 搭好注册通道，TP-3 由 session 切歌结算判定 <30s 后经此回注，D11）。
  * 本层不做“是否推荐曲”判定（判定材料归 session 所有）；参数宽松构造、垃圾信号由 reducer 归一丢弃。
+ * 短曲双计互斥：<~33s 短曲自然播尽时 session 结算点 playedSeconds < 30 仍会回注 skip，而本层同曲
+ * 已因 ≥90% 记了 complete（同一完整收听 skip+1 且 complete+1，localBonus 净额为负）——归并前先以
+ * isCompleteListen(playedSeconds, lastSettledDurationSec) 否决：时长取自本层自存的“上一首时长”
+ * （playerLoadeddata 锚定、不随切歌清零），与 session/profile 两个 musicToggled 订阅的执行顺序无关；
+ * 曲目时长未知（值为 0——启动后首曲前/元数据从未成功加载）时恒不否决、保守放行 skip（D9 快照口径不变）。
  */
-export const recordRecommendedSkip = (track: { artist?: string | null, title?: string | null, id?: string | null }): void => {
+export const recordRecommendedSkip = (track: { artist?: string | null, title?: string | null, id?: string | null, playedSeconds: number }): void => {
   try {
+    if (isCompleteListen(track.playedSeconds, lastSettledDurationSec)) return
     emitSignal({ kind: 'skip', id: track?.id, artist: track?.artist, title: track?.title })
   } catch (err) {
     console.warn('[profile] recordRecommendedSkip 异常', (err as Error).message)

@@ -115,9 +115,16 @@ const toKind = (value: unknown): ProfileSignalKind | null =>
  * 存在理由：「我喜欢」未加载进内存时 listMusicAdd 的早退路径按原始入参发射（此刻无列表无法去重，
  * D10 补裁），重复收藏、取消后再收藏的重复证据统一在此兜底消除；旧 love 事件被 FIFO 淘汰出窗口后
  * 再收藏同曲恢复计入（窗口语义，D2）。
+ * 口径边界：sameSong 对空 title 恒否，空曲名 love 不受幂等保护（真实 MusicInfo.name 非空，属保守承接边界）。
+ * 导出口径（入参取信号而非拆开字段）：reducer 幂等判定与编排层"被吸收的 love 是否补广播"共用本谓词；
+ * kind !== 'love'、空艺人、空状态/空信号恒否。
  */
-const isDuplicatedLove = (events: ProfileEvent[], artist: string, title: string): boolean => {
-  return events.some(event => event.kind === 'love' && sameSong(event, { artist, title }))
+export const isDuplicateLoveSignal = (state: ProfileState | null | undefined, signal: ProfileSignal | null | undefined): boolean => {
+  if (signal == null || signal.kind !== 'love') return false
+  const artist = toArtist(signal.artist)
+  if (!artist) return false
+  const title = toTitle(signal.title)
+  return (state?.events ?? []).some(event => event.kind === 'love' && sameSong(event, { artist, title }))
 }
 
 /** 证据量：分信号计数之和（艺人表截断与摘要 Top 排行的共用权重——不分极性，被触达最多的艺人优先保留）。 */
@@ -166,8 +173,9 @@ export const reduceProfileSignal = (state: ProfileState | null | undefined, sign
   if (!artist) return st
   const title = toTitle(signal.title)
 
-  // love 幂等（口径见 isDuplicatedLove 注记）：重复背书不动作，原引用返回使编排层不落盘不广播
-  if (kind === 'love' && isDuplicatedLove(st.events, artist, title)) return st
+  // love 幂等（口径见 isDuplicateLoveSignal 注记）：重复背书不动作（计数与事件缓冲均不增）；
+  // 原引用返回使编排层不落盘——被吸收的合法 love 是否补广播由编排层决定（计数吸收与背书广播解耦，见 profile.ts emitSignal）
+  if (isDuplicateLoveSignal(st, signal)) return st
 
   const prevEntry = st.artistCounts[artist]
   const entry: ArtistCounts = {
