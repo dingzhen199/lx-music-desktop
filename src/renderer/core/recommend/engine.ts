@@ -42,6 +42,7 @@ import type { AnchorLike, RankCandidateInput, RankPathInput, TrackAnalysis } fro
 import { recallCandidates } from './recall'
 import type { RecallAnchor, RecallCandidate } from './recall'
 import { filterExcludeTracks } from './candidatePool'
+import { shouldBlockLowConfidence } from './confidenceGate'
 import { emptyResultMessage } from './hints'
 import { includesSameSong, pushUniqueSameSong } from './sameSong'
 import type { SongRef } from './sameSong'
@@ -283,7 +284,7 @@ const aiRank = async(
       if (!eligibleByFormat(track, analysis, stateWords, excludes) || exclusionHit(track, excludes)) continue
       if (rankingWorldBreak(row, radius)) continue
       const confidence = String(row.confidence || 'medium').toLowerCase()
-      if (radius <= 45 && confidence === 'low') continue
+      if (shouldBlockLowConfidence(confidence)) continue
 
       const label = String(row.distance_from_anchor || '').toLowerCase()
       const explicit = Number(row.perceptual_distance)
