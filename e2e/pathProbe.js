@@ -7,6 +7,9 @@
  * - 播放栏状态文本变化：URL 拉取/换源失败也会改变状态（限流环境下 loadstart 可能不出现）。
  */
 
+// 同曲规则独立副本在本模块再导出（deep.js 依赖 pathProbe 的导出名；drift 防护见 e2e/sameSongRules.test.js）
+const { normalizeTitleText, artistTokens, sameSongText } = require('./sameSongRules')
+
 /** 在页面注册音频事件探针（必须在点击前调用）。 */
 async function setupSwitchProbe(window) {
   await window.evaluate(() => {
@@ -106,6 +109,7 @@ async function dismissOverlayModal(window) {
   for (let i = 0; i < 5; i++) {
     const info = await window.evaluate(() => {
       for (const el of document.querySelectorAll('div')) {
+        // eslint-disable-next-line no-undef -- 回调体在浏览器上下文执行（window.evaluate 序列化注入），getComputedStyle 由页面提供
         const cs = getComputedStyle(el)
         if (cs.backdropFilter && cs.backdropFilter !== 'none') {
           const btn = el.querySelector('button')
@@ -123,4 +127,4 @@ async function dismissOverlayModal(window) {
   return false
 }
 
-module.exports = { setupSwitchProbe, readSwitchProbe, readPlaybar, clickPathRowAndVerify, clickNonCurrentPathRow, dismissOverlayModal }
+module.exports = { setupSwitchProbe, readSwitchProbe, readPlaybar, clickPathRowAndVerify, clickNonCurrentPathRow, dismissOverlayModal, normalizeTitleText, artistTokens, sameSongText }

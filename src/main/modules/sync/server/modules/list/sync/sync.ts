@@ -2,6 +2,7 @@
 import { removeSelectModeListener, sendCloseSelectMode, sendSelectMode } from '@main/modules/winMain'
 import { getUserSpace, getUserConfig } from '../../../user'
 import { buildUserListInfoFull, getLocalListData, setLocalListData } from '@main/modules/sync/listEvent'
+import { fillUserListMeta } from './listMetaFill'
 import { SYNC_CLOSE_CODE } from '@common/constants_sync'
 // import { LIST_IDS } from '@common/constants'
 
@@ -151,6 +152,8 @@ const mergeList = (socket: LX.Sync.Server.Socket, sourceListData: LX.Sync.List.L
     const sourceList = userListDataObj.get(list.id)
     if (sourceList) {
       sourceList.list = handleMergeList(sourceList.list, list.list, addMusicLocationType)
+      // 首次同步（无快照）：来源侧未携带元数据（旧版本设备）时保留本地值，避免封面/简介/作者被 NULL 覆盖
+      fillUserListMeta(sourceList, list)
 
       const sourceUpdateTime = sourceList?.locationUpdateTime ?? 0
       if (targetUpdateTime >= sourceUpdateTime) return
@@ -182,7 +185,12 @@ const overwriteList = (sourceListData: LX.Sync.List.ListData, targetListData: LX
   newListData.userList = [...sourceListData.userList]
 
   targetListData.userList.forEach((list, index) => {
-    if (userListDataObj.has(list.id)) return
+    const sourceList = userListDataObj.get(list.id)
+    if (sourceList) {
+      // 首次同步（无快照）：来源侧未携带元数据（旧版本设备）时保留本地值
+      fillUserListMeta(sourceList, list)
+      return
+    }
     if (list?.locationUpdateTime) {
       newListData.userList.splice(index, 0, list)
     } else {

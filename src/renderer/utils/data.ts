@@ -13,7 +13,10 @@ import {
   saveLeaderboardSetting as saveLeaderboardSettingFromData,
   getLeaderboardSetting as getLeaderboardSettingFromData,
   saveViewPrevState as saveViewPrevStateFromData,
+  saveRecommendMetrics as saveRecommendMetricsFromData,
+  getRecommendMetrics as getRecommendMetricsFromData,
 } from '@renderer/utils/ipc'
+import type { MetricsState as RecommendMetrics } from '@renderer/core/recommend/session-core'
 import { throttle } from '@common/utils'
 import { type DEFAULT_SETTING, LIST_IDS } from '@common/constants'
 import { dateFormat } from './index'
@@ -128,7 +131,6 @@ export const setListUpdateError = async(id: string, error: string | null) => {
   await initListUpdateInfo()
   const targetInfo = getOrCreateListUpdateInfo(id)
   targetInfo.updateError = error
-  targetInfo.updateErrorAt = error == null ? null : Date.now()
   listUpdateInfo[id] = targetInfo
   saveListUpdateInfo()
 }
@@ -195,4 +197,27 @@ export const setLeaderboardSetting = async(setting: Partial<typeof DEFAULT_SETTI
 
 export const saveViewPrevState = (state: typeof DEFAULT_SETTING['viewPrevState']) => {
   saveViewPrevStateThrottle(state)
+}
+
+// ===== 探索电台本地指标（TT-4，D9/D14）：单 JSON 快照读写对 =====
+let recommendMetrics: RecommendMetrics | null
+const initRecommendMetrics = async() => {
+  // ipc 管道已收窄为 unknown 透传（通用层不识特性类型），本门面是类型收口点：按 session-core 的形状落型。
+  // no-unnecessary-type-assertion 豁免原因：eslint 的 type 程序用根 tsconfig（路径别名未开），
+  // ipc 模块在其视角下为 any，断言被误判多余；真实 tsc（src/renderer/tsconfig.json，别名生效）下断言必需
+  // eslint-disable-next-line require-atomic-updates, @typescript-eslint/no-unnecessary-type-assertion
+  recommendMetrics ??= await getRecommendMetricsFromData() as RecommendMetrics | null
+}
+/** 读取指标快照（无存档为 null，归一口径在 session-core.hydrateMetrics）。 */
+export const getRecommendMetrics = async(): Promise<RecommendMetrics | null> => {
+  await initRecommendMetrics()
+  return recommendMetrics ?? null
+}
+/**
+ * 写入指标快照：关键事件直写不节流（事件量级小——只发生在切歌/反馈/开收台/计划完成点），
+ * 延迟合并会把“最后一次事件”的落盘时机让给不确定的节流窗口，对计数器没有收益。
+ */
+export const saveRecommendMetrics = (metrics: RecommendMetrics): void => {
+  recommendMetrics = metrics
+  saveRecommendMetricsFromData(metrics)
 }

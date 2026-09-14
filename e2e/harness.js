@@ -44,13 +44,23 @@ async function waitMainWindow(app, timeoutMs = 90000) {
   throw new Error(`未找到主窗口: ${lastError?.message ?? '无窗口'}`)
 }
 
-/** 校验 dist 是生产构建（曾被 dev 构建覆盖过：dev main 会开 DevTools 并加载 localhost:9080 导致白屏）。 */
+/** 校验 dist 是生产构建（曾被 dev 构建覆盖过：dev main 会开 DevTools 并加载 localhost:9080 导致白屏）。
+ * 注意压缩器会把 'development' 转义（如 \u0064evelopment），单查字面量会漏判，需覆盖转义变体与入口特征。 */
 function assertProdBuild() {
   const mainJs = path.join(__dirname, '..', 'dist', 'main.js')
   if (!fs.existsSync(mainJs)) return
   const content = fs.readFileSync(mainJs, 'utf8')
-  if (content.includes('"development"') || content.includes("'development'")) {
-    throw new Error('dist/main.js 是 dev 构建，请先执行 npm run build:main && npm run build:renderer')
+  const devMarkers = [
+    '"development"',
+    "'development'",
+    '\\u0064evelopment',
+    '\\x64evelopment',
+    'localhost:9080',
+    'index-dev',
+  ]
+  const hit = devMarkers.find(marker => content.includes(marker))
+  if (hit) {
+    throw new Error(`dist/main.js 是 dev 构建（命中标记 ${hit}），请先执行 npm run build:main && npm run build:renderer`)
   }
 }
 

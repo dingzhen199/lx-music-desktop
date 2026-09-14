@@ -5,7 +5,7 @@
  * - OpenAI-compatible：Bearer 认证，messages 透传，取 choices[0].message.content；
  * - Anthropic：x-api-key + anthropic-version 头，system 拆到顶层字段，content 取 type=text 拼接；
  * - 非 2xx 抛出 `${status} ${响应片段}` 错误。
- * API Key 仅随 IPC 参数运行时传入，不落盘、不打日志。
+ * API Key 由调用方随 IPC 参数传入；本模块自身不持久化、不打日志（但它属设置项会写入本地配置，备份导出时已由 stripSensitiveSetting 剔除）。
  */
 import type { RecommendLlmMessage, RecommendLlmParams, RecommendLlmProtocol, RecommendLlmResult } from '@common/recommendation'
 import { httpFetch } from './request'
@@ -17,6 +17,8 @@ const LLM_TIMEOUT = 180_000
 const MAX_TOKENS = 384_000
 /** 模型/网关不支持大 max_tokens（4xx 报超限）时降档重试的保守值。 */
 const MIN_TOKENS = 8192
+/** max_tokens 报错文案关键词（超限/非法；网关措辞各有差异，命中任一即视为需降档）。 */
+const MAX_TOKENS_ERROR_HINTS = ['exceed', 'greater', 'larger', 'invalid', 'maximum', 'limit', 'less than', 'unsupported', '过大', '超出', '无效', '超限']
 
 /** 协议默认服务地址。 */
 const DEFAULT_BASE_URLS: Record<RecommendLlmProtocol, string> = {
@@ -70,10 +72,13 @@ interface OpenAIChatChoice {
   }
 }
 
-/** 错误响应是否抱怨 max_tokens 超限/非法（需降档重试）。 */
-const isMaxTokensError = (err: Error): boolean => {
+/** 报错中 token 形参名：新模型可能报 max_completion_tokens 而非 max_tokens。 */
+const TOKEN_PARAM_RE = /max_(?:completion_)?tokens/
+
+/** 错误响应是否抱怨 max_tokens 超限/非法（需降档重试）。导出以便单测锁定命中词表。 */
+export const isMaxTokensError = (err: Error): boolean => {
   const msg = (err?.message ?? '').toLowerCase()
-  return /max_tokens/.test(msg) && /exceed|greater|larger|invalid|maximum|limit|less than|过大|超出|无效|超限/.test(msg)
+  return TOKEN_PARAM_RE.test(msg) && MAX_TOKENS_ERROR_HINTS.some(hint => msg.includes(hint))
 }
 
 const completeOpenAI = async(

@@ -4,7 +4,8 @@
     <div v-if="!sessionView.active" :class="$style.empty">
       <p v-if="lastErrorText" :class="$style.error">{{ lastErrorText }}</p>
       <p>{{ hasPlaying ? t('explore__ready_tip') : t('explore__no_playing') }}</p>
-      <button :class="[$style.btn, { [$style.disabled]: !hasPlaying }]" :disabled="!hasPlaying" @click="handleStart">
+      <!-- 电台已开时置灰：同值写入不触发 session 层 watch 属设计使然，收台后的恢复路径是切歌自动重开或播放栏开关 -->
+      <button :class="[$style.btn, { [$style.disabled]: !hasPlaying }]" :disabled="!hasPlaying || appSetting['recommend.radio']" @click="handleStart">
         {{ t('explore__start') }}
       </button>
     </div>
@@ -39,7 +40,8 @@
           </div>
           <div :class="$style.row">
             <span :class="$style.label">{{ t('explore__instruction') }}</span>
-            <base-input :class="$style.input" :model-value="sessionView.instruction" :placeholder="t('explore__instruction_tip')" @update:model-value="handleInstructionChange" />
+            <base-input :class="$style.input" :model-value="instructionDraft" :placeholder="t('explore__instruction_tip')" @update:model-value="instructionDraft = $event" @submit="handleInstructionSend" />
+            <button :class="[$style.btn, $style.sendBtn]" @click="handleInstructionSend">{{ t('explore__instruction_send') }}</button>
           </div>
         </div>
 
@@ -62,20 +64,23 @@
         </div>
       </div>
 
-      <!-- 路径列表 -->
+      <!-- 路径列表（按计划批次分组展示，行结构不变） -->
       <div :class="$style.pathWrap">
         <div :class="$style.pathTitle">{{ t('explore__path') }}</div>
         <div v-if="!sessionView.path.length" :class="$style.pathEmpty">{{ t('explore__path_empty') }}</div>
-        <div v-for="item in pathItems" :key="item.key" :class="[$style.pathItem, { [$style.current]: item.isCurrent, [$style.played]: item.state === 'played', [$style.clickable]: item.id != null }]" @click="handlePathClick(item.id)">
-          <div :class="$style.pathIndex">{{ item.no }}</div>
-          <div :class="$style.pathMain">
-            <div :class="$style.pathName">
-              <span :class="$style.title">{{ item.title }}</span>
-              <span v-if="item.artist" :class="$style.artist"> - {{ item.artist }}</span>
+        <div v-for="batch in pathBatches" :key="batch.key" :class="$style.pathBatch">
+          <div :class="$style.batchHeader">{{ batch.header }}</div>
+          <div v-for="item in batch.items" :key="item.key" :class="[$style.pathItem, { [$style.current]: item.isCurrent, [$style.played]: item.state === 'played', [$style.clickable]: item.id != null }]" @click="handlePathClick(item.id)">
+            <div :class="$style.pathIndex">{{ item.no }}</div>
+            <div :class="$style.pathMain">
+              <div :class="$style.pathName">
+                <span :class="$style.title">{{ item.title }}</span>
+                <span v-if="item.artist" :class="$style.artist"> - {{ item.artist }}</span>
+              </div>
+              <div :class="$style.reason">{{ item.reason }}</div>
             </div>
-            <div :class="$style.reason">{{ item.reason }}</div>
+            <span :class="[$style.role, $style[`role_${item.journeyRole}`]]">{{ roleLabel(item.journeyRole) }}</span>
           </div>
-          <span :class="[$style.role, $style[`role_${item.journeyRole}`]]">{{ roleLabel(item.journeyRole) }}</span>
         </div>
       </div>
     </template>
@@ -86,9 +91,9 @@
 import { computed, ref, watch } from '@common/utils/vueTools'
 import { useI18n } from '@renderer/plugins/i18n'
 import { playMusicInfo } from '@renderer/store/player/state'
+import { appSetting, updateSetting } from '@renderer/store/setting'
 import {
   applyFeedback,
-  endSession,
   lastAiRankError,
   lastErrorKind,
   lastErrorText,
@@ -98,22 +103,60 @@ import {
   sessionView,
   setInstruction,
   setRadius,
-  startSession,
 } from '@renderer/core/recommend/session'
 import { debounce } from '@common/utils'
+import { groupPathByBatch } from '@renderer/core/recommend/session-core'
+import type { PathBatch, SessionPathItem } from '@renderer/core/recommend/session-core'
 
 const t = useI18n()
 
 const anchorPicError = ref(false)
+// 一句话约束草稿：受控本地值，点击“发送”/按 Enter 才提交（不再 debounce 自动重排）
+const instructionDraft = ref('')
 
 watch(() => sessionView.value.active, (active) => {
-  if (active) anchorPicError.value = false
+  if (!active) return
+  anchorPicError.value = false
+  // 会话（重）开始时草稿复位为会话当前约束（初始空串/重开）
+  instructionDraft.value = sessionView.value.instruction
+}, { immediate: true })
+
+// 约束被提交（setInstruction）后草稿与会话约束同步；打字过程中不被打断（其他视图更新不动草稿）
+watch(() => sessionView.value.instruction, (instruction) => {
+  if (sessionView.value.active) instructionDraft.value = instruction
 })
 
 const hasPlaying = computed(() => Boolean(playMusicInfo.musicInfo?.id))
 
 // 路径列表视图项：预计算序号与稳定 key，避免模板内模板字符串/索引运算（dev ts-loader 类型检查）
-const pathItems = computed(() => sessionView.value.path.map((item, i) => ({ ...item, no: i + 1, key: item.id ?? `path-${i}` })))
+const pathItems = computed<PathViewItem[]>(() => sessionView.value.path.map((item, i) => ({ ...item, no: i + 1, key: item.id ?? `path-${i}` })))
+
+// 注：类型别名引用 imported 类型而非本地 const（compileScript 会把顶层 type 提到 setup 之外）。
+type PathViewItem = SessionPathItem & { isCurrent: boolean, no: number, key: string }
+
+/** 组头文案：第 N 批 · 距离 {radius} · 约束 {instruction} · {engine}（约束空/无 batch 用“无”兜底）。 */
+const buildBatchHeader = (batch: PathBatch | null | undefined, index: number): string => {
+  const engine = batch ? t(batch.engine === 'ai' ? 'explore__engine_ai' : 'explore__engine_local') : ''
+  return t('explore__path_batch_header', {
+    index,
+    radius: batch ? batch.radius : '—',
+    instruction: batch && String(batch.instruction ?? '').trim() ? batch.instruction : t('explore__path_batch_none'),
+    engine: engine || '—',
+  })
+}
+
+/**
+ * 路径分批：分组语义（连续同批次成组/无批次跟随上一组/头部孤儿并入首组/全无批次单组）
+ * 已下沉到 session-core.groupPathByBatch；视图只把分组映射成 i18n 组头文案。
+ * 组头是额外元素，组内行结构（pathItem 及角色徽章父子关系）不变，不影响路径点击探针。
+ */
+const pathBatches = computed(() => {
+  return groupPathByBatch(pathItems.value).map((group, gi) => ({
+    key: group.key,
+    header: buildBatchHeader(group.batch, gi + 1),
+    items: group.items,
+  }))
+})
 
 const distanceWords = computed(() => {
   const radius = sessionView.value.radius
@@ -133,16 +176,14 @@ const roleLabel = (role: string): string => {
   }
 }
 
-const handleStart = async() => {
-  try {
-    await startSession()
-  } catch (err) {
-    console.warn('[explore] 开始会话失败', (err as Error).message)
-  }
+// 开始/结束同源于电台开关（D10 双入口单源）：本页只写 recommend.radio，
+// 开台（含收台后空态的 lastErrorText 展示）与收台清场统一由 session 层 watch 响应，不直接调 session
+const handleStart = () => {
+  updateSetting({ 'recommend.radio': true })
 }
 
 const handleEnd = () => {
-  endSession()
+  updateSetting({ 'recommend.radio': false })
 }
 
 const handlePathClick = (id: string | null) => {
@@ -162,9 +203,10 @@ const handleRadiusChange = debounce((value: number) => {
   setRadius(Number(value))
 }, 300)
 
-const handleInstructionChange = debounce((value: string) => {
-  setInstruction(value)
-}, 500)
+// 发送按钮 / 输入框 Enter：提交一句话约束（草稿受控本地值，不自动重排）
+const handleInstructionSend = () => {
+  setInstruction(instructionDraft.value)
+}
 </script>
 
 <style lang="less" module>
@@ -322,6 +364,9 @@ const handleInstructionChange = debounce((value: string) => {
     flex: auto;
     max-width: 300px;
   }
+  .sendBtn {
+    flex: none;
+  }
 }
 
 .status {
@@ -350,6 +395,15 @@ const handleInstructionChange = debounce((value: string) => {
   .pathEmpty {
     font-size: 12px;
     color: var(--color-font-label);
+  }
+}
+
+.pathBatch {
+  .batchHeader {
+    font-size: 12px;
+    color: var(--color-font-label);
+    margin: 10px 0 6px;
+    padding-left: 2px;
   }
 }
 

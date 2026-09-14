@@ -295,6 +295,19 @@ export const getViewPrevState = async() => {
   return (await rendererInvoke<string, typeof DEFAULT_SETTING['viewPrevState']>(WIN_MAIN_RENDERER_EVENT_NAME.get_data, DATA_KEYS.viewPrevState)) ?? { ...DEFAULT_SETTING.viewPrevState }
 }
 
+// TT-4（D9/D14）：探索电台本地指标快照（单 JSON，不进设置项）；
+// 通用管道不识别特性类型，unknown 透传——快照形状归 session-core 所有，类型收口在特性门面 data.ts
+export const saveRecommendMetrics = (metrics: unknown) => {
+  rendererSend(WIN_MAIN_RENDERER_EVENT_NAME.save_data, {
+    path: DATA_KEYS.recommendMetrics,
+    data: metrics,
+  })
+}
+// 获取探索电台本地指标快照（无存档为 null，由调用方 hydrate 归一）
+export const getRecommendMetrics = async() => {
+  return rendererInvoke<string, unknown>(WIN_MAIN_RENDERER_EVENT_NAME.get_data, DATA_KEYS.recommendMetrics)
+}
+
 
 export const getSystemFonts = async() => {
   return rendererInvoke<string[]>(CMMON_EVENT_NAME.get_system_fonts).catch(() => {

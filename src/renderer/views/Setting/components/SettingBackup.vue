@@ -42,6 +42,7 @@ import { getListMusics, overwriteListFull, overwriteListMusics } from '@renderer
 import { LIST_IDS } from '@common/constants'
 import { defaultList, loveList, userLists } from '@renderer/store/list/state'
 import { appSetting, updateSetting } from '@renderer/store/setting'
+import { stripSensitiveSetting } from '@renderer/utils/sensitiveSetting'
 import migrateSetting from '@common/utils/migrateSetting'
 
 
@@ -107,6 +108,9 @@ export default {
               source: list.source,
               sourceListId: list.sourceListId,
               locationUpdateTime: list.locationUpdateTime ?? null,
+              cover: list.cover ?? null,
+              desc: list.desc ?? null,
+              author: list.author ?? null,
             })
           }
         } catch (err) {
@@ -175,7 +179,7 @@ export default {
     const exportAllData = async(path) => {
       let allData = {
         type: 'allData_v2',
-        setting: { ...appSetting },
+        setting: stripSensitiveSetting(appSetting),
         playList: await getAllLists(),
       }
       void window.lx.worker.main.saveLxConfigFile(path, allData)
@@ -193,7 +197,7 @@ export default {
     const exportSetting = (path) => {
       const data = {
         type: 'setting_v2',
-        data: { ...appSetting },
+        data: stripSensitiveSetting(appSetting),
       }
       void window.lx.worker.main.saveLxConfigFile(path, data)
     }

@@ -212,6 +212,8 @@ export class AudioFeatureCollector {
     if (this.started) return
     this.started = true
     this.sampling = true
+    // 开始新的采集窗口前清空旧桶：重开窗口（如探索会话重开）后，残留桶会被误当作新锚点的特征
+    this.buckets = []
     try {
       if (!this.getAnalyserFn) {
         const plugin = await import('@renderer/plugins/player')

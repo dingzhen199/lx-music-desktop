@@ -92,15 +92,11 @@ function compactContext(
   anchor: AnchorLike,
   radius: number,
   instruction: string,
-  positiveArtists: string[],
-  negativeArtists: string[],
 ): string {
   return [
     `Anchor: ${anchor.artist} — ${anchor.title}${anchor.album ? ` · ${anchor.album}` : ''}`,
     `Exploration distance: ${radius}/100`,
     `Session instruction: ${instruction || '无'}`,
-    `Positive signals: ${positiveArtists.join('、') || '无'}`,
-    `Negative signals: ${negativeArtists.join('、') || '无'}`,
     anchor.lyricContext ? `Lyric semantic context: ${anchor.lyricContext}` : '',
   ].filter(Boolean).join('\n')
 }
@@ -110,7 +106,7 @@ export function buildAnchorAnalysisPrompt({ anchor, radius, instruction = '' }: 
   radius: number
   instruction?: string
 }): string {
-  return `${compactContext(anchor, radius, instruction, [], [])}
+  return `${compactContext(anchor, radius, instruction)}
 
 请建立 Anchor 的“听觉与审美画像”（Music Fingerprint + Aesthetic Reading）。不要直接给最终歌曲。
 请先建立 Anchor 的 Music Fingerprint，但不要停在维度标签。
@@ -242,14 +238,12 @@ export interface RankPathInput {
   pathState?: string
 }
 
-export function buildRankingPrompt({ anchor, radius, instruction = '', analysis, candidates, positiveArtists = [], negativeArtists = [], recentPath = [] }: {
+export function buildRankingPrompt({ anchor, radius, instruction = '', analysis, candidates, recentPath = [] }: {
   anchor: AnchorLike
   radius: number
   instruction?: string
   analysis?: { fingerprint?: Record<string, unknown>, aesthetic?: Record<string, unknown> } | null
   candidates: RankCandidateInput[]
-  positiveArtists?: string[]
-  negativeArtists?: string[]
   recentPath?: RankPathInput[]
 }): string {
   const simplified = candidates.map((t, i) => ({
@@ -273,7 +267,7 @@ export function buildRankingPrompt({ anchor, radius, instruction = '', analysis,
     state: t.pathState || 'played',
   }))
 
-  return `${compactContext(anchor, radius, instruction, positiveArtists, negativeArtists)}
+  return `${compactContext(anchor, radius, instruction)}
 
 Anchor Fingerprint:
 ${JSON.stringify(analysis?.fingerprint ?? {}, null, 2)}

@@ -41,6 +41,12 @@ import {
 import type { AnchorLike, RankCandidateInput, RankPathInput, TrackAnalysis } from './prompts'
 import { recallCandidates } from './recall'
 import type { RecallAnchor, RecallCandidate } from './recall'
+import { filterExcludeTracks } from './candidatePool'
+import { normalizeConfidence, shouldBlockLowConfidence } from './confidenceGate'
+import { emptyResultMessage } from './hints'
+import { includesSameSong, pushUniqueSameSong } from './sameSong'
+import type { SongRef } from './sameSong'
+import { passesInstrumentalGate, wantsInstrumental } from './vocalGate'
 
 /** AI 配置（仅运行时传入，不落盘）。 */
 export interface AiConfig {
@@ -70,12 +76,16 @@ export interface ExploreOptions {
   ai?: AiConfig
   /** 会话锚点覆盖（T-B2 replan 用；缺省取当前播放歌曲）。 */
   anchor?: ExploreAnchor
-  /** 复用起点分析（跳过分析步骤；T-B2 续补沿会话语义，也省一次 LLM 分析）。 */
+  /** 复用起点分析（跳过分析步骤；T-B2 续补沿会话语义，也省一次 LLM 分析）。
+   * 作废语义（D3）：一句话约束变更后调用方不再传本选项，引擎本次自动重新分析（召回方向随新约束换道）。 */
   reuseAnalysis?: TrackAnalysis
-  /** 队列追加模式：top=置顶（默认/首计划），bottom=追加队尾（续补）。 */
+  /** 队列追加模式：bottom=追加队尾（会话路径一律传此值，D6 队尾统一）；
+   * top=置顶仅为默认缺省，保留给 dev 钩子直调 exploreOnce 的无会话手动探索（插队试听旧行为，不参与会话流程）。 */
   appendMode?: 'top' | 'bottom'
   /** 已推荐过的候选 id（续补时避免重复入队）。 */
   excludeIds?: string[]
+  /** 跨批次排除已推荐/已播曲目（artist/title，按 sameSong 防同曲不同 id 变体重复入队）。 */
+  excludeTracks?: SongRef[]
   /** 最近路径（已播/已计划，供 AI 排序提示词延续弧线）。 */
   recentPath?: RankPathInput[]
 }
@@ -215,6 +225,12 @@ const rankingWorldBreak = (row: unknown, radius: number): boolean => {
 /** AI 排序分批大小：候选最多 48 条，单次提示过长既拖慢生成也容易触发超时；分批让模型每次只判断最多 16 首。 */
 const RANK_BATCH_SIZE = 16
 
+/**
+ * LLM 行级距离标签 → 感知距离分（0-100）映射；标签未知/缺失时按中线 50。
+ * 与召回侧 gates.SEMANTIC_DISTANCE_*（按查询序号分配距程）语义不同，数值相近纯属巧合，勿共用常量。
+ */
+const DISTANCE_LABEL_SCORE: Record<string, number> = { near: 24, medium: 50, far: 76 }
+
 /** LLM 排序：字段映射参照 from-here aiRank 的 enriched / aestheticReject 语义。 */
 const aiRank = async(
   ai: AiConfig,
@@ -269,16 +285,20 @@ const aiRank = async(
       const idx = Number(row.candidate_id ?? row.i)
       const track = batch[idx]
       if (!track || pickedIds.has(String(track.encryptedId))) continue
+      // 同曲不同 id 变体批内保险：多批次 merge 后仍可能残留同曲（候选池已按 sameSong 去重，
+      // 此处兜底防 LLM 分批产物里不同 id 的同曲变体）。
+      if (includesSameSong(picked, track)) continue
       if (rowLanguageBlocked(row, track, constraints)) continue
       if (!eligibleByFormat(track, analysis, stateWords, excludes) || exclusionHit(track, excludes)) continue
       if (rankingWorldBreak(row, radius)) continue
-      const confidence = String(row.confidence || 'medium').toLowerCase()
-      if (radius <= 45 && confidence === 'low') continue
+      // 归一口径已收口 confidenceGate：本变量同时供守门判定与下方候选透传，二者共用同一归一值
+      const confidence = normalizeConfidence(row.confidence)
+      if (shouldBlockLowConfidence(confidence)) continue
 
       const label = String(row.distance_from_anchor || '').toLowerCase()
       const explicit = Number(row.perceptual_distance)
       let mapped: number | null = Number.isFinite(explicit) ? Math.max(0, Math.min(100, explicit)) : null
-      if (mapped == null) mapped = label === 'near' ? 24 : label === 'medium' ? 50 : label === 'far' ? 76 : 50
+      if (mapped == null) mapped = DISTANCE_LABEL_SCORE[label] ?? 50
       if (mapped > radius + 10 && radius <= 65) continue
 
       const enriched: RecallCandidate = {
@@ -306,15 +326,16 @@ const aiRank = async(
   // 跨批合并为全局序列：score 同标尺，按降序排；相同 score 保持批内顺序（稳定排序）
   picked.sort((a, b) => (Number(b.aiScore) || 0) - (Number(a.aiScore) || 0))
   const arc = composeListeningArc(picked, anchor, radius, 8)
-  return diversify(arc, anchor, 8) as RecallCandidate[]
+  return diversify(arc, anchor, 8, radius) as RecallCandidate[]
 }
 
 // ============================ 本地回退排序（from-here localRank 语义简化） ============================
 
 /**
- * 确定性本地排序：taste 弱偏好（liked+6/同艺人近距+8/semantic+10/playlist+2）、
+ * 确定性本地排序：taste 弱偏好（同艺人+8/semantic+10/playlist+2、最近播放+1）、
  * 超半径过滤、T-B0 守门（eligibleByFormat/coarseWorldBreak/exclusionHit/localLanguageBlocked），
  * 最后经 composeListeningArc + diversify 收敛。
+ * 无红心加分：红心歌已在候选池（candidatePool 红心排除）硬排除，候选侧 liked 恒 false。
  */
 const localRank = (
   pool: RecallCandidate[],
@@ -325,6 +346,7 @@ const localRank = (
   analysis: TrackAnalysis,
   constraints: LanguageConstraints,
 ): RecallCandidate[] => {
+  const seenTracks: RecallCandidate[] = []
   const items = pool
     .filter(t => {
       if (exclusionHit(t, excludes)) return false
@@ -334,21 +356,22 @@ const localRank = (
       if (Number(t.distance) > Number(radius)) return false
       return true
     })
+    // 同曲不同 id 变体保险：候选池已按 sameSong 去重，此处兜底防不同批次混入的同曲变体。
+    .filter(t => pushUniqueSameSong(seenTracks, t))
     .map((t, i) => {
+      // 基础分 + 来源弱偏好 + 最近播放微调；红心歌已在候选池硬排除，此排序无红心加分。
       let score = 100 - Number(t.distance) * 0.7
-      if (t.source === 'liked') score += 6
-      else if (t.source === 'same-artist') score += 8
+      if (t.source === 'same-artist') score += 8
       else if (t.source === 'semantic-search') score += 10
       else if (t.source === 'playlist') score += 2
-      if (t.liked) score += 3
-      else if (t.recent) score += 1
+      if (t.recent) score += 1
       score += (i % 5) * 0.17
       return { ...t, aiScore: Math.max(0, Math.min(100, score)) }
     })
     .sort((a, b) => Number(b.aiScore) - Number(a.aiScore))
   if (!items.length) return []
   const arc = composeListeningArc(items, anchor, radius, 8)
-  return diversify(arc, anchor, 8) as RecallCandidate[]
+  return diversify(arc, anchor, 8, radius) as RecallCandidate[]
 }
 
 // ============================ exploreOnce ============================
@@ -413,17 +436,19 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
     analysis = fallbackAnalysis(anchor)
   }
 
-  // 3. 跨源召回（语义关键词 + 同艺人 + 本地我喜欢/收藏歌单）
+  // 3. 跨源召回（语义关键词 + 同艺人 + 本地收藏歌单；「我喜欢」仅用于红心排除）
   const recall = await recallCandidates(recallAnchor, analysis, radius, {
     excludedLanguages: constraints.excludedLanguages,
   })
-  // T-B2：续补时排除本会话已推荐过的候选，避免重复入队。
-  const excludeSet = new Set((options.excludeIds ?? []).map(id => String(id)))
-  const pool = recall.items.filter(t => !excludeSet.has(String(t.encryptedId)))
+  // T-B2：续补时排除本会话已推荐过的候选，避免重复入队（按 id 与 sameSong 双通道，
+  // 防同曲不同 id 变体跨批次重复）。
+  const pool = filterExcludeTracks(recall.items, options.excludeIds ?? [], options.excludeTracks ?? [])
   if (!pool.length) {
-    throw new Error(constraints.excludedLanguages?.length
-      ? '当前硬约束下没有找到可用候选。不会退回被你排除的音乐来凑数，请稍后重试。'
-      : '这次没有找到能加入播放队列的后续歌曲，请稍后重试，或把探索距离稍微打开一点。')
+    throw new Error(emptyResultMessage({
+      wantsInstrumental: wantsInstrumental(stateWords),
+      excludedLanguages: constraints.excludedLanguages,
+      stage: 'pool',
+    }))
   }
 
   // 4. 排序：LLM 优先（抛错时自动重试，全部失败才回退本地），AI 未配置直接本地
@@ -454,19 +479,31 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
     ranked = localRank(pool, anchor, radius, stateWords, activeExcludes, analysis, constraints)
   }
   if (!ranked.length) {
-    throw new Error(constraints.excludedLanguages?.length
-      ? '当前硬约束下没有足够可靠的后续歌曲，不会用不符合要求的歌凑数；可以换一种描述或稍后重试。'
-      : '候选全部被当前边界过滤掉了，可以把距离稍微打开一点。')
+    // 文案优先级：器乐诉求 → 语言硬约束 → 通用（hints.emptyResultMessage，两级空结果共用）
+    throw new Error(emptyResultMessage({
+      wantsInstrumental: wantsInstrumental(stateWords),
+      excludedLanguages: constraints.excludedLanguages,
+      stage: 'ranked',
+    }))
   }
 
-  // 5. 插入“稍后播放”队列（T-B2：续补模式追加队尾，不重排已计划的路径）
+  // 5. 器乐硬门（诉求 1 补漏）：用户要求纯音乐/器乐时，反向过滤人声候选。
+  //    T-B0（judgment）只处理 anchor 人声→压制器乐方向（transformationAllowed/vocalMismatch），
+  //    AI 排序对“有无歌词”的语义判定不可靠；此处以元数据器乐词或 AI 行 vocal 连续性低（<0.4）为准。
+  ranked = ranked.filter(t => passesInstrumentalGate(t, stateWords, t.continuity))
+  if (!ranked.length && wantsInstrumental(stateWords)) {
+    // 排序结果非空但被器乐硬门全部拦下：文案与“要求器乐 + 排序后为空”共用同一来源。
+    throw new Error(emptyResultMessage({ wantsInstrumental: true, excludedLanguages: constraints.excludedLanguages, stage: 'ranked' }))
+  }
+
+  // 6. 插入“稍后播放”队列（T-B2：续补模式追加队尾，不重排已计划的路径）
   addTempPlayList(ranked.map(t => ({
     listId: LIST_IDS.PLAY_LATER,
     musicInfo: t.musicInfo,
     isTop: options.appendMode !== 'bottom',
   })))
 
-  // 6. 返回视图
+  // 7. 返回视图
   return {
     engine,
     anchor: { artist: anchor.artist, title: anchor.title, album: anchor.album ?? '' },
@@ -504,6 +541,9 @@ export const registerDevHook = (): void => {
     startCollect: startFeatureCollection,
     stopCollect: stopFeatureCollection,
     clearSession,
+    // TT-4（D9/AC7）：只读本地指标快照。透传 data.ts 读档通道，本函数不做归并/计数逻辑；
+    // 动态 import 避免 engine→data 的顶层加载边，快照形状见 session-core.MetricsState
+    metrics: async() => (await import('@renderer/utils/data')).getRecommendMetrics(),
   }
 }
 

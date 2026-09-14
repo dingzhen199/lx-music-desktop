@@ -112,8 +112,6 @@ describe('buildRankingPrompt - 排序提示词', () => {
     instruction: '保持人声',
     analysis,
     candidates,
-    positiveArtists: ['The Killers'],
-    negativeArtists: ['华晨宇'],
     recentPath: [{ artist: 'Mew', title: 'Comforting Sounds', journeyRole: 'land', distance: 32, reason: '落下', pathState: 'played' }],
   })
 
@@ -144,10 +142,8 @@ describe('buildRankingPrompt - 排序提示词', () => {
     expect(prompt).toContain('距离 <=45 时，有明显 world_break 的候选不应该进入 sequence。')
     expect(prompt).toContain('非 Anchor Artist 默认最多 1 首')
   })
-  it('包含最近路径与正负向信号', () => {
+  it('包含最近路径', () => {
     // act & assert
-    expect(prompt).toContain('Positive signals: The Killers')
-    expect(prompt).toContain('Negative signals: 华晨宇')
     expect(prompt).toContain('state=planned')
     expect(prompt).toContain('Comforting Sounds')
   })
