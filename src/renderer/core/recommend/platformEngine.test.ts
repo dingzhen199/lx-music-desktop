@@ -1,0 +1,119 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { explorePlatformOnce } from './platformEngine'
+import type { PlatformRecallAnchor, PlatformRecallResult } from './platformRecall'
+
+const mocks = vi.hoisted(() => ({
+  recall: vi.fn(),
+  addQueue: vi.fn(),
+  getListMusics: vi.fn(),
+  queue: [] as any[],
+}))
+vi.mock('./platformRecall', () => ({ recallPlatformSimilar: mocks.recall }))
+vi.mock('@renderer/store/player/action', () => ({ addTempPlayList: mocks.addQueue }))
+vi.mock('@renderer/store/player/state', () => ({ tempPlayList: mocks.queue }))
+vi.mock('@renderer/store/list/listManage/rendererListManage', () => ({ getListMusics: mocks.getListMusics }))
+vi.mock('@renderer/store/list/listManage/state', () => ({ loveList: { id: 'love' }, userLists: [] }))
+
+const anchor: PlatformRecallAnchor = {
+  artist: '周杰伦', title: '晴天', album: '叶惠美', intervalSec: 269, id: 'wy_186016', source: 'wy', seedIds: { wy: '186016' },
+}
+const musicInfo = (id: string, name: string, singer: string) => ({ id, name, singer, source: 'wy', interval: '04:00', meta: {} } as any)
+const fused = (id: string, name: string, singer: string, providers: Array<['wy' | 'tx', number]> = [['wy', 1]]) => ({
+  artist: singer,
+  title: name,
+  album: 'Album',
+  musicInfo: musicInfo(id, name, singer),
+  fusionScore: 1,
+  sources: providers.map(([provider, rank]) => ({ provider, rank, musicInfo: musicInfo(`${provider}_${name}`, name, singer) })),
+})
+
+const recallResult = (over: Partial<PlatformRecallResult> = {}): PlatformRecallResult => ({
+  state: 'ok',
+  items: [fused('wy_1', '花海', '周杰伦')],
+  providers: [{ provider: 'wy', status: 'success', seedId: '186016', fromCache: false }],
+  error: null,
+  ...over,
+})
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  mocks.queue.splice(0)
+  mocks.getListMusics.mockResolvedValue([])
+  mocks.recall.mockResolvedValue(recallResult())
+})
+
+describe('平台相似推荐引擎', () => {
+  it('成功结果追加队尾入队，不打断当前播放（isTop=false）', async() => {
+    const result = await explorePlatformOnce({ anchor, appendMode: 'bottom' })
+    expect(result.engine).toBe('platform')
+    expect(result.candidates).toHaveLength(1)
+    expect(mocks.addQueue).toHaveBeenCalledTimes(1)
+    expect(mocks.addQueue.mock.calls[0][0][0]).toMatchObject({ listId: null, isTop: false })
+    expect(mocks.addQueue.mock.calls[0][0][0].musicInfo.id).toBe('wy_1')
+  })
+
+  it('enqueue=false 不入队（会话路径先登记归属再自行入队）', async() => {
+    await explorePlatformOnce({ anchor, enqueue: false })
+    expect(mocks.addQueue).not.toHaveBeenCalled()
+  })
+
+  it('全部平台失败抛错（走会话层有限重试，不静默回退）', async() => {
+    mocks.recall.mockResolvedValue(recallResult({ state: 'all-failed', items: [], error: 'wy: down；tx: down' }))
+    await expect(explorePlatformOnce({ anchor })).rejects.toThrow('down')
+    expect(mocks.addQueue).not.toHaveBeenCalled()
+  })
+
+  it.each(['exhausted', 'no-match', 'empty', 'empty-after-filter'] as const)('零候选状态 %s 不抛错、不入队、状态可区分', async(state) => {
+    mocks.recall.mockResolvedValue(recallResult({ state, items: [] }))
+    const result = await explorePlatformOnce({ anchor })
+    expect(result.meta.state).toBe(state)
+    expect(result.candidates).toEqual([])
+    expect(mocks.addQueue).not.toHaveBeenCalled()
+  })
+
+  it('红心歌由引擎收集并传给召回（保持发现新歌语义）', async() => {
+    mocks.getListMusics.mockResolvedValue([{ id: 'wy_9', singer: '周杰伦', name: '花海' }])
+    await explorePlatformOnce({ anchor })
+    expect(mocks.recall.mock.calls[0][1].lovedTracks).toEqual([{ artist: '周杰伦', title: '花海' }])
+  })
+
+  it('当前稍后播放队列曲目传给召回（同曲不重复插入）', async() => {
+    mocks.queue.push({ musicInfo: { id: 'wy_8', singer: '林俊杰', name: '江南' } })
+    await explorePlatformOnce({ anchor })
+    expect(mocks.recall.mock.calls[0][1].queueTracks).toEqual([{ artist: '林俊杰', title: '江南' }])
+  })
+
+  it('理由只陈述可验证事实：单来源标注平台，双来源标注共同推荐', async() => {
+    mocks.recall.mockResolvedValue(recallResult({
+      items: [
+        fused('wy_1', '共同曲', 'A', [['wy', 2], ['tx', 1]]),
+        fused('wy_2', '单源曲', 'B', [['tx', 3]]),
+      ],
+    }))
+    const result = await explorePlatformOnce({ anchor })
+    expect(result.candidates[0].reason).toBe('两个平台共同推荐')
+    expect(result.candidates[0].source).toBe('aggregated')
+    expect(result.candidates[1].reason).toBe('QQ 音乐相关歌曲推荐')
+    expect(result.candidates[1].source).toBe('tx')
+  })
+
+  it('来源证据（各来源排名与备用音源）透传到视图', async() => {
+    const result = await explorePlatformOnce({ anchor })
+    expect(result.candidates[0].sources[0]).toMatchObject({ provider: 'wy', rank: 1 })
+    expect(result.candidates[0].sources[0].musicInfo.id).toBe('wy_花海')
+  })
+
+  it('召回前/后取消直接抛取消错误，不入队', async() => {
+    mocks.recall.mockResolvedValue(recallResult())
+    await expect(explorePlatformOnce({ anchor, isCancelled: () => true })).rejects.toThrow('取消')
+    expect(mocks.addQueue).not.toHaveBeenCalled()
+  })
+
+  it('部分来源失败但仍有结果：状态 ok 且携带非阻断错误信息', async() => {
+    mocks.recall.mockResolvedValue(recallResult({ error: 'tx: 请求超时' }))
+    const result = await explorePlatformOnce({ anchor })
+    expect(result.meta.state).toBe('ok')
+    expect(result.meta.error).toContain('tx')
+    expect(mocks.addQueue).toHaveBeenCalledTimes(1)
+  })
+})

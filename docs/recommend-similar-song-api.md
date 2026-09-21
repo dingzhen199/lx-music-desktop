@@ -2,6 +2,8 @@
 
 > 状态：已确认方向，未实现。本文档仅为后续开发留底。
 
+> 2026-09-20：实施以 [平台相似歌曲聚合推荐需求](./platform-similar-recommendation-spec.md) 为准。下文是历史草案；平台接口可用性需重新验证，固定感知距离和静默回退旧召回的建议已被新需求覆盖。
+
 ## 背景
 
 探索/AI 推荐的召回（`src/renderer/core/recommend/recall.ts`）当前只有三个来源：

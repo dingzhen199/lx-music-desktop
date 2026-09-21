@@ -10,7 +10,7 @@ const os = require('os')
 const APP_ROOT = path.resolve(__dirname, '..')
 const ART_DIR = path.resolve(os.tmpdir(), 'lx-e2e-artifacts')
 
-function makeProfileDir() {
+function makeProfileDir(extraSettings) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lx-e2e-profile-'))
   // 预置设置：关闭「显示更新日志」弹窗（首启时版本信息网络返回后延迟弹出，
   // 时机不定，会拦截后续点击导致 e2e 随机级联超时；其余设置走默认值）
@@ -18,7 +18,7 @@ function makeProfileDir() {
   fs.mkdirSync(lxDataDir, { recursive: true })
   fs.writeFileSync(
     path.join(lxDataDir, 'config_v2.json'),
-    JSON.stringify({ version: null, setting: { 'common.showChangeLog': false } }),
+    JSON.stringify({ version: null, setting: { 'common.showChangeLog': false, ...(extraSettings ?? {}) } }),
     'utf8',
   )
   return dir
@@ -69,13 +69,14 @@ function assertProdBuild() {
  * @param {string[]} [opts.args] 额外 electron 参数
  * @param {NodeJS.ProcessEnv} [opts.extraEnv]
  * @param {string} [opts.profileDir] 复用已有 profile（否则新建）
+ * @param {Record<string, unknown>} [opts.extraSettings] 预写入 profile 的额外设置项
  * @returns {Promise<{app: import('playwright-core').ElectronApplication, window: import('playwright-core').Page, profileDir: string}>}
  */
 async function launchApp(opts = {}) {
   fs.mkdirSync(ART_DIR, { recursive: true })
   assertProdBuild()
   // macOS 上 Electron 的 userData 不跟随 $HOME，必须用 --user-data-dir 才能隔离
-  const profileDir = opts.profileDir ?? makeProfileDir()
+  const profileDir = opts.profileDir ?? makeProfileDir(opts.extraSettings)
   const electronPath = require('electron')
   const app = await _electron.launch({
     executablePath: electronPath,

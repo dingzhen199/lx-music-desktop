@@ -21,11 +21,16 @@
 node e2e/e2e.js    # 基线：启动/协议/探索空态/A1 链接识别/A3 弹窗/设置 AI/搜索播放/探索会话
 node e2e/deep.js   # T-B2 深度：自动续补/far 反馈/一句话约束/离开返回/幂等/结束
 node e2e/sync.js   # T-A2/T-A3：导入真实歌单→元数据持久化校验→重启→启动自动同步记录
-node e2e/ai.js     # T-B1：mock LLM（e2e/mockLlm.js）→ 设置 AI → AI 计划/排序请求命中
-node e2e/radio.js  # 探索电台（TT-1~TT-5）：跟歌重锚/约束作废/本地引擎/断网失败收台/指标落盘/重启自动开台
+node e2e/ai.js     # T-B1：mock LLM（e2e/mockLlm.js）→ 设置 AI → AI 计划/排序请求命中（预写 recommend.engine='ai'）
+node e2e/radio.js  # 探索电台（TT-1~TT-5）：跟歌重锚/约束作废/本地引擎/断网失败收台/指标落盘/重启自动开台（预写 recommend.engine='local'）
+node e2e/platform.js  # 平台相似推荐（默认引擎，零 LLM）：平台推荐标识/隐藏距离与约束控件/喜欢与不再推荐反馈/来源理由/设置页不依赖 AI
 node e2e/common.js  # 常用功能回归：导航/搜索/播放控制/播放详情/桌面歌词/我的列表 CRUD/收藏/榜单/设置 tab
 node e2e/smoke.js  # 仅冒烟：启动+页面文本+错误采集
 ```
+
+> 2026-09-20 平台相似推荐合入后：推荐默认引擎为 platform（平台相似歌曲，零 LLM）。
+> `radio.js`/`ai.js` 分别预写 `recommend.engine='local'/'ai'` 以回归旧引擎路径；
+> 平台默认路径由 `platform.js` 覆盖（依赖外网 wy/tx 相似端点，见 docs/platform-similar-recommendation-p0.md）。
 
 ## 关键约定
 

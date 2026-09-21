@@ -379,7 +379,7 @@ const handlePlayNext = (playMusicInfo: LX.Player.PlayMusicInfo) => {
  * 否则只是续播上一个加载的音频），用户会看着新标题继续听旧歌。
  */
 export const playMusicInfoNow = (musicInfo: LX.Music.MusicInfo | LX.Download.ListItem, listId: string | null = null) => {
-  setPlayMusicInfo(listId, musicInfo)
+  setPlayMusicInfo(listId, musicInfo, true)
   handlePlay()
 }
 /**

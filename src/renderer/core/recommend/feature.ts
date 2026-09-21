@@ -170,7 +170,7 @@ export const summarizeBuckets = (buckets: AudioBucket[]): FeatureSheet => {
   }
 }
 
-// ============================ 播放器接入（集成部分，不作单测） ============================
+// ============================ 播放器接入（生命周期见 featureCollector.test.ts） ============================
 
 /**
  * 从 AnalyserNode 拉取特征的采集器：
@@ -182,6 +182,7 @@ export const summarizeBuckets = (buckets: AudioBucket[]): FeatureSheet => {
 export class AudioFeatureCollector {
   private buckets: AudioBucket[] = []
   private started = false
+  private generation = 0
   private sampling = false
   private timer: ReturnType<typeof setInterval> | null = null
   private lastPullAt = 0
@@ -210,6 +211,7 @@ export class AudioFeatureCollector {
 
   async start(): Promise<void> {
     if (this.started) return
+    const generation = ++this.generation
     this.started = true
     this.sampling = true
     // 开始新的采集窗口前清空旧桶：重开窗口（如探索会话重开）后，残留桶会被误当作新锚点的特征
@@ -220,11 +222,14 @@ export class AudioFeatureCollector {
         this.getAnalyserFn = plugin.getAnalyser
       }
     } catch (err) {
+      if (generation !== this.generation) return
       this.started = false
       this.sampling = false
       console.error('[feature] 加载播放器分析器失败', err)
       return
     }
+    // 动态 import 等待期间可能已经 stop 或重开，只允许当前代际安装资源。
+    if (!this.started || generation !== this.generation) return
     this.lastPullAt = 0
     this.timer = setInterval(() => {
       void this.pull()
@@ -256,6 +261,7 @@ export class AudioFeatureCollector {
 
   stop(): void {
     if (!this.started) return
+    this.generation++
     this.started = false
     this.sampling = false
     if (this.timer != null) {

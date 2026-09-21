@@ -2,6 +2,9 @@
  * 探索电台 e2e（TT-1~TT-5 电台语义冒烟）：跟歌重锚 / 队尾清场 / 约束作废日志 / 本地引擎标识 /
  * 失败收台与复活 / 指标落盘 / 重启自动开台。用法: node e2e/radio.js
  *
+ * 2026-09-20 平台相似推荐合入后：本脚本固定预写 recommend.engine='local'（旧引擎路径回归），
+ * 平台默认路径（零 LLM）由 e2e/platform.js 覆盖。
+ *
  * 覆盖口径（与 docs/explore-radio/spec.md AC 对照）：
  * - AC1 跟歌重锚、AC5 本地引擎分档、AC9 连续失败收台（网络阻断模拟）、AC10 重启自动开台：本脚本直接验证。
  * - AC3 弱验证：约束变更的作废 warn 日志 + 新批次组头快照（召回换道属 AI 模式行为，本地档只能验信号）。
@@ -112,7 +115,8 @@ async function playSearchRow(window, offset) {
 
   // ============ 第一程：开火与行为 ============
   {
-    const { app, window, profileDir: dir } = await launchApp()
+    // 固定旧本地引擎（本脚本断言本地计划/距离/约束等旧引擎 UI；平台默认路径见 platform.js）
+    const { app, window, profileDir: dir } = await launchApp({ extraSettings: { 'recommend.engine': 'local' } })
     profileDir = dir
     const errors = collectErrors(window)
     // 作废 warn（AC3 弱信号）：console.warn 经 collectErrors 不采集，自挂监听

@@ -6,13 +6,13 @@
  * “用户要求纯音乐 → 过滤人声候选”的反向硬门；AI 排序对“有无歌词”的
  * 语义判定不可靠，故在此补充确定性反向过滤。
  * 本模块不依赖 judgment/prompts 的运行时逻辑（判定自实现），由 vitest 直接测试；
- * judgment.ts / gates.ts / prompts.ts 保持只读。
+ * judgment.ts 共用诉求判定，prompts.ts 要求模型显式输出 vocal_type。
  *
  * 跨模块正则漂移说明：judgment.ts 中存在表面相似的器乐判定
  * （likelyDerivative ~370 / vocalMismatch ~394 / coarseWorldBreak ~404），
  * 但语义刻意不同——judgment 面向“衍生态/人声失配压制”，本门面向
- * “用户显式要求器乐 → 反向过滤人声候选”。修改任何一侧时请勿假定另一侧会同步，
- * 两侧词表/前缀规则各自独立演进。
+ * “用户显式要求器乐 → 反向过滤人声候选”。元数据词表各有用途；
+ * 用户诉求统一由 wantsInstrumental 判定。
  */
 
 /**
@@ -65,6 +65,7 @@ export interface InstrumentalCandidate {
   album?: string | null
   tags?: string[] | null
   continuity?: VocalContinuity | null
+  vocalType?: 'instrumental' | 'vocal' | 'unknown'
 }
 
 /**
@@ -81,19 +82,17 @@ export const wantsInstrumental = (stateWords: string): boolean => {
 
 /**
  * 候选是否器乐：元数据信号（title/artist/album/tags 命中器乐词）
- * 或 AI 行 vocal 连续性明确低（number 且 < 0.4 → 器乐推断）。
- * vocal 只认数字：LLM 行 continuity.vocal 为 null/'' 是常见缺失形态，
- * Number(null)/Number('') 恒为 0，强转会把缺失当“低连续性”误放行人声候选。
+ * 或 AI 明确标注 vocalType=instrumental。
+ * continuity.vocal 表示与起点的人声相似度，低分不能证明没有人声。
  */
 export const candidateIsInstrumental = (
   track: InstrumentalCandidate | null | undefined,
-  continuity: VocalContinuity | null | undefined = track?.continuity,
+  _continuity: VocalContinuity | null | undefined = track?.continuity,
 ): boolean => {
   const t = track ?? {}
   const hay = `${t.title ?? ''} ${t.artist ?? ''} ${t.album ?? ''} ${(t.tags ?? []).join(' ')}`.toLowerCase()
   if (INSTRUMENTAL_META_RE.test(hay)) return true
-  const vocal = (continuity ?? {})?.vocal
-  return typeof vocal === 'number' && vocal < 0.4
+  return t.vocalType === 'instrumental'
 }
 
 /**

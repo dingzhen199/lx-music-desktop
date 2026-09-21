@@ -13,12 +13,9 @@ import { httpFetch } from './request'
 /** 单次 LLM 调用超时（毫秒）。LLM 首字延迟高（长上下文 + 部分模型推理慢），60s 频繁报 Headers Timeout；放宽到 3 分钟。 */
 const LLM_TIMEOUT = 180_000
 
-/** 输出 token 上限：现役模型普遍支持 1M 上下文 / 384K 输出，直接按上限配置（之前 8192 太小，推理模型易被截断）。 */
+/** 保留高输出预算以容纳推理模型；不支持时 renderer 在同一重试预算内降档。
+ * 每次 IPC 只发一次 HTTP，避免协议降档与业务重试相乘。 */
 const MAX_TOKENS = 384_000
-/** 模型/网关不支持大 max_tokens（4xx 报超限）时降档重试的保守值。 */
-const MIN_TOKENS = 8192
-/** max_tokens 报错文案关键词（超限/非法；网关措辞各有差异，命中任一即视为需降档）。 */
-const MAX_TOKENS_ERROR_HINTS = ['exceed', 'greater', 'larger', 'invalid', 'maximum', 'limit', 'less than', 'unsupported', '过大', '超出', '无效', '超限']
 
 /** 协议默认服务地址。 */
 const DEFAULT_BASE_URLS: Record<RecommendLlmProtocol, string> = {
@@ -42,7 +39,7 @@ const resolveProtocol = (protocol: RecommendLlmProtocol | undefined, baseUrl: st
 /** 非 2xx 抛错（与 from-here fetchJson 的错误语义一致）。 */
 const assertOk = (statusCode: number | undefined, body: unknown): void => {
   const code = statusCode ?? 0
-  if (code >= 200 && code < 400) return
+  if (code >= 200 && code < 300) return
   const snippet = typeof body === 'string'
     ? body
     : JSON.stringify(body ?? '')
@@ -72,15 +69,6 @@ interface OpenAIChatChoice {
   }
 }
 
-/** 报错中 token 形参名：新模型可能报 max_completion_tokens 而非 max_tokens。 */
-const TOKEN_PARAM_RE = /max_(?:completion_)?tokens/
-
-/** 错误响应是否抱怨 max_tokens 超限/非法（需降档重试）。导出以便单测锁定命中词表。 */
-export const isMaxTokensError = (err: Error): boolean => {
-  const msg = (err?.message ?? '').toLowerCase()
-  return TOKEN_PARAM_RE.test(msg) && MAX_TOKENS_ERROR_HINTS.some(hint => msg.includes(hint))
-}
-
 const completeOpenAI = async(
   baseUrl: string,
   apiKey: string,
@@ -88,39 +76,30 @@ const completeOpenAI = async(
   messages: RecommendLlmMessage[],
   maxTokens: number = MAX_TOKENS,
 ): Promise<string> => {
-  let res: { statusCode?: number, body?: { choices?: OpenAIChatChoice[] } }
-  try {
-    res = await httpFetch<{ choices?: OpenAIChatChoice[] }>(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      timeout: LLM_TIMEOUT,
-      retryNum: 0,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      json: {
-        model,
-        temperature: 0.25,
-        max_tokens: maxTokens,
-        messages,
-      },
-    })
-    assertOk(res.statusCode, res.body)
-  } catch (err) {
-    // 部分模型/网关不支持大 max_tokens（返回 4xx 报超限），降档到保守值再试一次
-    if (maxTokens > MIN_TOKENS && isMaxTokensError(err as Error)) {
-      return completeOpenAI(baseUrl, apiKey, model, messages, MIN_TOKENS)
-    }
-    throw err
-  }
+  const res = await httpFetch<{ choices?: OpenAIChatChoice[] }>(`${baseUrl}/chat/completions`, {
+    method: 'POST',
+    timeout: LLM_TIMEOUT,
+    retryNum: 0,
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    json: {
+      model,
+      temperature: 0.25,
+      max_tokens: maxTokens,
+      messages,
+    },
+  })
+  assertOk(res.statusCode, res.body)
   const choice = res.body?.choices?.[0]
   const content = extractContentText(choice?.message?.content)
-  if (content) return content
   const reason = choice?.finish_reason
+  if (content && reason !== 'length') return content
   const hasReasoning = extractContentText(choice?.message?.reasoning_content ?? choice?.message?.reasoning) !== ''
   throw new Error(
     reason === 'length'
-      ? `LLM 输出被截断（finish_reason=length，max_tokens=${maxTokens} 被思考/推理耗尽），返回内容为空`
+      ? `LLM 输出被截断（finish_reason=length，max_tokens=${maxTokens} 耗尽）`
       : hasReasoning
         ? 'LLM 仅返回思考内容（reasoning_content），未返回结果 JSON'
         : `LLM 返回空内容（finish_reason=${reason ?? '无'}）`,
@@ -142,33 +121,26 @@ const completeAnthropic = async(
     temperature: 0.25,
     messages: rest,
   }
-  if (system) body.system = system
-  let res: { statusCode?: number, body?: { content?: Array<{ type?: string, text?: string }> } }
-  try {
-    res = await httpFetch<{ content?: Array<{ type?: string, text?: string }> }>(`${baseUrl}/messages`, {
-      method: 'POST',
-      timeout: LLM_TIMEOUT,
-      retryNum: 0,
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      json: body,
-    })
-    assertOk(res.statusCode, res.body)
-  } catch (err) {
-    if (maxTokens > MIN_TOKENS && isMaxTokensError(err as Error)) {
-      return completeAnthropic(baseUrl, apiKey, model, messages, MIN_TOKENS)
-    }
-    throw err
-  }
+  if (system) body.system = [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }]
+  const res = await httpFetch<{ stop_reason?: string, content?: Array<{ type?: string, text?: string }> }>(`${baseUrl}/messages`, {
+    method: 'POST',
+    timeout: LLM_TIMEOUT,
+    retryNum: 0,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    json: body,
+  })
+  assertOk(res.statusCode, res.body)
   const blocks = Array.isArray(res.body?.content) ? res.body.content : []
   const text = blocks
     .filter(item => item?.type === 'text')
     .map(item => item?.text ?? '')
     .join('\n')
     .trim()
+  if (res.body?.stop_reason === 'max_tokens') throw new Error('LLM 输出被截断（stop_reason=max_tokens）')
   if (text) return text
   const hasThinking = blocks.some(item => item?.type === 'thinking')
   throw new Error(hasThinking
@@ -185,7 +157,7 @@ export const llmComplete = async(params: RecommendLlmParams): Promise<RecommendL
   const baseUrl = normalizeBaseUrl(params.baseUrl) || DEFAULT_BASE_URLS[resolveProtocol(params.protocol, '')]
   const protocol = resolveProtocol(params.protocol, baseUrl)
   const content = protocol === 'anthropic'
-    ? await completeAnthropic(baseUrl, params.apiKey, params.model, params.messages)
-    : await completeOpenAI(baseUrl, params.apiKey, params.model, params.messages)
+    ? await completeAnthropic(baseUrl, params.apiKey, params.model, params.messages, params.maxTokens)
+    : await completeOpenAI(baseUrl, params.apiKey, params.model, params.messages, params.maxTokens)
   return { content }
 }

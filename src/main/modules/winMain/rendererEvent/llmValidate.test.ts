@@ -140,3 +140,10 @@ describe('validateLlmParams - LLM 参数校验', () => {
     expect(() => { validateLlmParams(params) }).toThrow('LLM message 格式非法')
   })
 })
+
+it.each([0, -1, 1.5, 384001, NaN, Infinity, '8192'])('拒绝非法输出预算 %s', maxTokens => {
+  expect(() => { validateLlmParams({ ...validParams(), maxTokens }) }).toThrow('LLM maxTokens 格式非法')
+})
+it.each([8192, 384000])('接受合法输出预算 %s', maxTokens => {
+  expect(() => { validateLlmParams({ ...validParams(), maxTokens }) }).not.toThrow()
+})

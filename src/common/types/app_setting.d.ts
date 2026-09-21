@@ -716,8 +716,17 @@ declare global {
        */
       'ai.model': string
 
+      /** AI 模型请求并发上限（1-8，默认 3） */
+      'ai.maxConcurrentRequests': number
+
       /**
-       * 推荐会话默认探索距离（10-90）
+       * 推荐引擎：platform=平台相似推荐（默认，零 LLM，不要求 AI Key）；
+       * ai/local=旧 AI/本地引擎（显式选择才进入，平台推荐失败不会自动降级到它们）
+       */
+      'recommend.engine': 'platform' | 'ai' | 'local'
+
+      /**
+       * 推荐会话默认探索距离（10-90；仅 ai/local 引擎使用）
        */
       'recommend.radius': number
 

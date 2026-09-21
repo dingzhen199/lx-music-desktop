@@ -1,5 +1,7 @@
 # 探索电台 Spec（to-spec：只汇总已确认决定）
 
+2026-09-20 修复更新：器乐守门、AI 回退与集成测试边界见 [AI 歌曲推荐审查](../ai-recommendation-review.md)；下文保留原始阶段规格。
+
 来源：2026-09-12 grill-with-docs 三轮裁决（Q1–Q14）+ B7 审核补裁（文档修订于 2026-09-13），决策全文账本见下文 D1–D15；状态机与成本立场的"为什么"见 `docs/adr/0001-explore-radio-state-machine.md`；统一词汇见仓库根 `CONTEXT.md`。
 
 ## 目标

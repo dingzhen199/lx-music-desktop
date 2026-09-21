@@ -190,9 +190,13 @@ describe('candidateIsInstrumental - 候选器乐信号', () => {
     expect(candidateIsInstrumental({ title: '夜曲（器乐版）' })).toBe(true)
   })
 
-  it('continuity.vocal = 0.1 → true', () => {
+  it('continuity.vocal = 0.1 只说明人声差异大，不能推断纯器乐', () => {
     // act & assert
-    expect(candidateIsInstrumental({ title: '普通歌' }, { vocal: 0.1 })).toBe(true)
+    expect(candidateIsInstrumental({ title: '普通歌' }, { vocal: 0.1 })).toBe(false)
+  })
+
+  it('显式器乐类型不依赖与起点的人声连续性', () => {
+    expect(candidateIsInstrumental({ title: '普通歌', vocalType: 'instrumental' }, { vocal: 0.9 })).toBe(true)
   })
 
   it('continuity.vocal = 0.8 → false', () => {

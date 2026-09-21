@@ -13,6 +13,7 @@
  */
 
 import { sameSong } from './sameSong'
+import type { SongRef } from './sameSong'
 
 /** 探索距离下限（feedback far 的边界）。 */
 export const RADIUS_MIN = 10
@@ -35,8 +36,11 @@ export const START_RADIO_DEBOUNCE_MS = 1200
 /** 同一 run 内连续计划最终失败达到该次数即收台（initial 失败与续补重试耗尽均计入，任一成功清零；D13）。 */
 export const PLAN_FAILURE_LIMIT = 3
 
-/** 反馈类型：far=太远了（收紧距离），good=就这个方向。 */
-export type FeedbackKind = 'far' | 'good'
+/**
+ * 反馈类型：far=太远了（收紧距离，仅旧引擎）；good=就这个方向（喜欢这首）；
+ * dislike=不再推荐这首（平台推荐默认反馈，曲目进会话级不再推荐列表，与收藏无关）。
+ */
+export type FeedbackKind = 'far' | 'good' | 'dislike'
 
 /** 会话起点（从当前播放歌曲提取）。 */
 export interface SessionAnchor {
@@ -46,6 +50,12 @@ export interface SessionAnchor {
   album?: string
   /** 封面（用于会话卡片展示）。 */
   pic?: string | null
+  /** 起点音乐来源（'wy'|'tx'|其他；平台相似种子定位用，不解析全局 id 字符串猜测）。 */
+  source?: string | null
+  /** 起点在各平台的原生歌曲 id（当前歌曲来自 wy/tx 时直接可用，免搜索定位）。 */
+  seedIds?: { wy?: string, tx?: string } | null
+  /** 起点时长（秒；跨平台种子定位的版本甄别用，未知为 null）。 */
+  intervalSec?: number | null
 }
 
 /** 路径条目状态：planned=已计划未播，played=已听过。 */
@@ -57,8 +67,8 @@ export interface PathBatch {
   radius: number
   /** 计划发起时的一句话约束（用户原样输入，不含反馈拼接）。 */
   instruction: string
-  /** 该次计划实际使用的引擎（AI 或本地回退）。 */
-  engine: 'ai' | 'local'
+  /** 该次计划实际使用的引擎（平台相似 / AI 或本地回退）。 */
+  engine: 'platform' | 'ai' | 'local'
 }
 
 /** 路径条目（含来源原因与弧线角色）。 */
@@ -86,6 +96,11 @@ export interface SessionState {
   negativeArtists: string[]
   recommendedIds: string[]
   path: SessionPathItem[]
+  /**
+   * 会话内明确「不再推荐」的曲目（dislike 反馈累积；同曲去重）。
+   * 会话级生命周期：同 run 重锚沿用，收台/新会话清空；与收藏列表无关。
+   */
+  dislikedTracks: SongRef[]
   /**
    * 同一 run 内连续计划最终失败次数（达到 PLAN_FAILURE_LIMIT 收台）。
    * 可选以兼容 TT-1 之前构造的会话对象（缺省按 0 计）；createSession 始终初始化为 0。
@@ -121,6 +136,7 @@ export const createSession = (anchor: SessionAnchor, options: { radius?: number,
     negativeArtists: [],
     recommendedIds: [],
     path: [],
+    dislikedTracks: [],
     consecutivePlanFailures: 0,
   }
 }
@@ -185,17 +201,24 @@ export const analysisStale = (state: SessionState | null, analysisInstruction?: 
 }
 
 /**
- * 反馈转移：far → 半径减 8（下限 10）+ 当前艺人入 negativeArtists；
- * good → 半径不变 + 当前艺人入 positiveArtists。
+ * 反馈转移：far → 半径减 8（下限 10）+ 当前艺人入 negativeArtists（仅旧引擎的半径语义）；
+ * good → 半径不变 + 当前艺人入 positiveArtists；
+ * dislike → 当前曲目入会话级「不再推荐」列表（同曲去重；与收藏无关，不修改播放队列）。
  * 反馈只影响策略（后续续补），不跳过当前歌（path/recommendedIds 不动）。
  */
-export const applyFeedback = (state: SessionState, kind: FeedbackKind, artist: string): SessionState => {
+export const applyFeedback = (state: SessionState, kind: FeedbackKind, artist: string, track?: SongRef): SessionState => {
   if (kind === 'far') {
     return {
       ...state,
       radius: clampRadius(state.radius - FEEDBACK_RADIUS_STEP),
       negativeArtists: pushArtist(state.negativeArtists, artist),
     }
+  }
+  if (kind === 'dislike') {
+    const ref: SongRef = { artist: track?.artist ?? artist, title: track?.title }
+    if (!String(ref.title ?? '').trim()) return state
+    if (state.dislikedTracks.some(item => sameSong(item, ref))) return state
+    return { ...state, dislikedTracks: [...state.dislikedTracks, ref] }
   }
   return {
     ...state,

@@ -11,13 +11,14 @@
  * LLM 增量摘要（TP-5/D7：summaryDue 命中且启用 AI 且有 Key 时 fire-and-forget 重写，在途单飞、失败保旧）。
  * 判定与计数口径全部在 profile-core（纯函数，vitest 覆盖）；本文件不 import session（D11 单向依赖），
  * 全部事件处理器经 safeHandle 兜底不外抛（e2e“无脚本错误”断言直接暴露此面，B7-m6）。
- * 属于集成层：验证方式为 tsc/lint/全量构建 + dev hook 冒烟（spec Test Seams）。
+ * profile.test.ts 覆盖摘要并发与曲目时长归属；另经 tsc/lint/构建验证集成。
  */
 import { isPlay, playMusicInfo } from '@renderer/store/player/state'
 import { playProgress } from '@renderer/store/player/playProgress'
 import { appSetting } from '@renderer/store/setting'
 import { getRecommendProfile, saveRecommendProfile } from '@renderer/utils/data'
 import type { RecommendLlmProtocol } from '@common/recommendation'
+import { normalizeRecommendEngine } from '@common/recommendationConfig'
 import { llmComplete } from './llm'
 import { accumulatePlayTime, createPlayTimeState, readPlayedMs } from './session-core'
 import type { PlayTimeState } from './session-core'
@@ -94,9 +95,12 @@ const emitSignal = (signal: ProfileSignal): void => {
 export const getProfileState = (): ProfileState | null => profileState
 
 // ===== TP-5 LLM 增量摘要（D7）=====
-/** AI 配置（与 session.ts buildAiConfig 同口径的独立副本——本模块不 import session，D11；未启用返回 undefined）。 */
+/** AI 配置（与 session.ts buildAiConfig 同口径的独立副本——本模块不 import session，D11）。
+ * 平台推荐为默认路径（recommend.engine 缺省/垃圾值回落 platform）：仅显式选择旧 AI 引擎时
+ * 才允许摘要重写发起 LLM 请求——即使旧 ai.enable=true，平台/本地模式也不发（AC3 零 LLM）。 */
 const buildAiConfig = (): { protocol?: RecommendLlmProtocol, baseUrl?: string, apiKey: string, model: string } | undefined => {
   if (!appSetting['ai.enable']) return undefined
+  if (normalizeRecommendEngine(appSetting['recommend.engine']) !== 'ai') return undefined
   return {
     protocol: appSetting['ai.provider'],
     baseUrl: appSetting['ai.baseUrl'],
@@ -112,7 +116,8 @@ const summaryFlight = { inFlight: false }
  * LLM 增量摘要重写（D7）：summaryDue 命中（loves+completes 相对 basedOnCount 增量 ≥20）且启用 AI 且有 Key 时
  * fire-and-forget 重写一次；在途单飞（B7-m2，参照 session.ts refillFlight 先例）；输入 = profile-core
  * buildSummaryPrompt（Top50 艺人计数 + 近 100 条事件）；失败 console.warn 落证并保留旧摘要（basedOnCount 不前移，
- * 下轮正向信号仍会触发重写）；成功落盘摘要文本（D12：落盘前 ≤200 字截断）+ basedOnCount = 成功点的 loves+completes。
+ * 下轮正向信号仍会触发重写）；成功落盘摘要文本（D12：落盘前 ≤200 字截断）+
+ * basedOnCount = 请求快照的 loves+completes，不能确认模型从未看到的在途增量。
  */
 const maybeRewriteSummary = (): void => {
   const st = profileState
@@ -121,6 +126,8 @@ const maybeRewriteSummary = (): void => {
   // 无 Key 不发起调用（D7：零成本路径）
   if (!ai?.apiKey) return
   summaryFlight.inFlight = true
+  const basedOnCount = st.loves + st.completes
+  let succeeded = false
   void llmComplete({
     protocol: ai.protocol,
     baseUrl: ai.baseUrl,
@@ -131,14 +138,16 @@ const maybeRewriteSummary = (): void => {
     const text = String(result?.content ?? '').trim()
     const cur = profileState
     if (text && cur != null) {
-      // 成功后落盘（D7）：basedOnCount 取成功点的当前计数——在途期间新到的正向信号自然包含进增量口径
-      profileState = { ...cur, summary: { text: text.slice(0, SUMMARY_MAX_CHARS), basedOnCount: cur.loves + cur.completes } }
+      profileState = { ...cur, summary: { text: text.slice(0, SUMMARY_MAX_CHARS), basedOnCount } }
       saveRecommendProfile(profileState)
+      succeeded = true
     }
   }).catch((err: unknown) => {
     console.warn('[profile] 摘要重写失败，保留旧摘要', (err as Error).message)
   }).finally(() => {
     summaryFlight.inFlight = false
+    // 成功后续接在途期间积累的增量；失败等待下一次行为触发，避免无限自动重试。
+    if (succeeded) maybeRewriteSummary()
   })
 }
 
@@ -169,13 +178,10 @@ let playTime: PlayTimeState = createPlayTimeState()
 /** 当前曲目时长快照（秒；playerLoadeddata 锚定，未知为 0——isCompleteListen 对未知时长恒不判定，D9）。 */
 let durationSnapshotSec = 0
 /**
- * 最近成功加载元数据曲目的时长（秒；与 durationSnapshotSec 同源锚定 playerLoadeddata，但不随切歌清零）。
- * 只服务 recordRecommendedSkip 的短曲双计互斥否决（不影响 completes 判定——completes 仍用 durationSnapshotSec）：
- * 本层自存“上一首时长”，session 的 skip 回注无论在 profile 的切歌结算之前还是之后到达，读到的都是
- * 上一首的时长——与两个模块 musicToggled 订阅的执行顺序无关（注册顺序只影响 durationSnapshotSec 的读取时点，
- * 故不复用它）。启动后首曲之前/从未成功加载元数据时为 0 → 恒不否决、保守放行 skip（spec D9“未知不判定听完”的同源口径）。
+ * 最近加载/结算曲目的时长，必须绑定曲目身份；元数据未加载的歌曲不能借用前一首的时长。
+ * loadeddata 与切歌结算都更新快照，skip 回注在 profile 结算前后均能命中上一首。
  */
-let lastSettledDurationSec = 0
+let lastSettledDuration: { id: string, seconds: number } | null = null
 
 /** 上一首曲目信息（切歌时结算上一首用；推荐曲跳过判定不在本层——由 session 经 recordRecommendedSkip 回注）。 */
 interface LastTrack {
@@ -212,9 +218,7 @@ const handlePlayerLoadeddata = safeHandle(() => {
   const duration = Number(playProgress.maxPlayTime)
   const snapped = Number.isFinite(duration) && duration > 0 ? duration : 0
   durationSnapshotSec = snapped
-  // 自存“上一首时长”供 skip 互斥否决（见 lastSettledDurationSec 注记）：元数据到达必早于下一次切歌派发，
-  // 两种订阅顺序下回注时点读到的都是本首（即将被结算为“上一首”）的时长；垃圾值写 0，恒不否决
-  lastSettledDurationSec = snapped
+  lastSettledDuration = lastTrack ? { id: lastTrack.id, seconds: snapped } : null
 })
 
 /**
@@ -226,6 +230,7 @@ const handlePlayerLoadeddata = safeHandle(() => {
 const handleMusicToggled = safeHandle(() => {
   const now = Date.now()
   if (lastTrack != null) {
+    lastSettledDuration = { id: lastTrack.id, seconds: durationSnapshotSec }
     playTime = accumulatePlayTime(playTime, 'trackEnd', now)
     if (isCompleteListen(readPlayedMs(playTime, now) / 1000, durationSnapshotSec)) {
       emitSignal({ kind: 'complete', id: lastTrack.id, artist: lastTrack.artist, title: lastTrack.title })
@@ -260,13 +265,14 @@ const handleLoveListMusicsAdded = safeHandle((musicInfos: LX.Music.MusicInfo[]) 
  * 本层不做“是否推荐曲”判定（判定材料归 session 所有）；参数宽松构造、垃圾信号由 reducer 归一丢弃。
  * 短曲双计互斥：<~33s 短曲自然播尽时 session 结算点 playedSeconds < 30 仍会回注 skip，而本层同曲
  * 已因 ≥90% 记了 complete（同一完整收听 skip+1 且 complete+1，localBonus 净额为负）——归并前先以
- * isCompleteListen(playedSeconds, lastSettledDurationSec) 否决：时长取自本层自存的“上一首时长”
+ * isCompleteListen(playedSeconds, duration) 否决：时长取自本层自存的、与该曲 id 匹配的“上一首时长”
  * （playerLoadeddata 锚定、不随切歌清零），与 session/profile 两个 musicToggled 订阅的执行顺序无关；
  * 曲目时长未知（值为 0——启动后首曲前/元数据从未成功加载）时恒不否决、保守放行 skip（D9 快照口径不变）。
  */
 export const recordRecommendedSkip = (track: { artist?: string | null, title?: string | null, id?: string | null, playedSeconds: number }): void => {
   try {
-    if (isCompleteListen(track.playedSeconds, lastSettledDurationSec)) return
+    const duration = lastSettledDuration && lastSettledDuration.id === track.id ? lastSettledDuration.seconds : 0
+    if (isCompleteListen(track.playedSeconds, duration)) return
     emitSignal({ kind: 'skip', id: track?.id, artist: track?.artist, title: track?.title })
   } catch (err) {
     console.warn('[profile] recordRecommendedSkip 异常', (err as Error).message)

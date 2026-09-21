@@ -2,6 +2,7 @@ import leaderboard from './leaderboard'
 import lyric from './lyric'
 import songList from './songList'
 import musicSearch from './musicSearch'
+import simiSong from './simiSong'
 import { apis } from '../api-source'
 import hotSearch from './hotSearch'
 import comment from './comment'
@@ -12,6 +13,7 @@ const tx = {
   leaderboard,
   songList,
   musicSearch,
+  simiSong,
   hotSearch,
   comment,
 

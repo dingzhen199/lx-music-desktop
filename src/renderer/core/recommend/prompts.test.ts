@@ -266,3 +266,22 @@ describe('recallQueries - 召回查询生成', () => {
     expect(recallQueries(a, 80, 3)[0].reason).toBe('B；R；N')
   })
 })
+
+describe('缓存友好的固定前缀', () => {
+  it('分析与排序共享完整审美前缀', () => {
+    expect(ANALYSIS_SYSTEM.startsWith(AESTHETIC_CONSTITUTION)).toBe(true)
+    expect(RANK_SYSTEM.startsWith(AESTHETIC_CONSTITUTION)).toBe(true)
+  })
+  it('规则不因锚点、约束、距离或候选变化而变化，候选在末尾', () => {
+    const marker = '\n\n本轮上下文：\n'
+    const first = { artist: 'a', title: 'b', source: 'semantic-search' }
+    const second = { artist: 'x', title: 'y', source: 'playlist' }
+    const a = buildRankingPrompt({ anchor, radius: 20, instruction: '安静', candidates: [first] })
+    const b = buildRankingPrompt({ anchor: second, radius: 80, instruction: '热闹', candidates: [second] })
+    expect(a.split(marker)[0]).toBe(b.split(marker)[0])
+    expect(a.indexOf('Ranking 原则')).toBeLessThan(a.indexOf('Anchor:'))
+    expect(a.indexOf('Anchor:')).toBeLessThan(a.indexOf('下面是音乐平台返回的真实候选'))
+    expect(buildAnchorAnalysisPrompt({ anchor, radius: 20 }).split(marker)[0])
+      .toBe(buildAnchorAnalysisPrompt({ anchor: second, radius: 80 }).split(marker)[0])
+  })
+})

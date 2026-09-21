@@ -21,6 +21,8 @@ export interface RecommendLlmParams {
   /** API Key，仅运行时传入，禁止写入仓库与日志。 */
   apiKey: string
   model: string
+  /** 单次输出预算；降档也计入统一请求重试次数。 */
+  maxTokens?: number
   messages: RecommendLlmMessage[]
 }
 
