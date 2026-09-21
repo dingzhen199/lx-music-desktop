@@ -34,6 +34,11 @@ declare global {
       'common.apiSource': string
 
       /**
+       * 备源 api id 列表（有序，仅参与播放取流失败时的轮换；第一个启用源即 common.apiSource 主源）
+       */
+      'common.apiSourceBackups': string[]
+
+      /**
        * 音源名称类型，原名、别名
        */
       'common.sourceNameType': 'alias' | 'real'

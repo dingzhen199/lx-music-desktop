@@ -5,6 +5,7 @@ import {
   importApi,
   removeApi,
   setApi,
+  setBackups,
   getStatus,
   request,
   cancelRequest,
@@ -23,6 +24,10 @@ export default () => {
 
   mainHandle<LX.UserApi.UserApiSetApiParams>(WIN_MAIN_RENDERER_EVENT_NAME.set_user_api, async({ params: apiId }) => {
     await setApi(apiId)
+  })
+
+  mainHandle<LX.UserApi.UserApiSetApiBackupsParams>(WIN_MAIN_RENDERER_EVENT_NAME.set_user_api_backups, async({ params: apiIds }) => {
+    await setBackups(apiIds)
   })
 
   mainHandle<LX.UserApi.UserApiInfo[]>(WIN_MAIN_RENDERER_EVENT_NAME.get_user_api_list, async() => {

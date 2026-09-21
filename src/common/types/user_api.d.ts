@@ -46,6 +46,7 @@ declare namespace LX {
     }
     type UserApiRequestCancelParams = string
     type UserApiSetApiParams = string
+    type UserApiSetApiBackupsParams = string[]
 
     interface UserApiSetAllowUpdateAlertParams {
       id: string

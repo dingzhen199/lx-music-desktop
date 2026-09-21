@@ -25,6 +25,7 @@ node e2e/ai.js     # T-B1：mock LLM（e2e/mockLlm.js）→ 设置 AI → AI 计
 node e2e/radio.js  # 探索电台（TT-1~TT-5）：跟歌重锚/约束作废/本地引擎/断网失败收台/指标落盘/重启自动开台（预写 recommend.engine='local'）
 node e2e/platform.js  # 平台相似推荐（默认引擎，零 LLM）：平台推荐标识/隐藏距离与约束控件/喜欢与不再推荐反馈/来源理由/设置页不依赖 AI
 node e2e/common.js  # 常用功能回归：导航/搜索/播放控制/播放详情/桌面歌词/我的列表 CRUD/收藏/榜单/设置 tab
+node e2e/userApiBackups.js  # 多活音源（ADR-0003）：预置双假源（主源必失败/备源返回本地音频）→ 双窗口装载/源管理 UI 勾选与持久化/播放回退链（主源✗→换提供方→备源✓）/写回我的列表
 node e2e/smoke.js  # 仅冒烟：启动+页面文本+错误采集
 ```
 

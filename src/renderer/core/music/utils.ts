@@ -1,5 +1,4 @@
-import { qualityList } from '@renderer/store'
-import { assertApiSupport } from '@renderer/store/utils'
+import { qualityList, userApi } from '@renderer/store'
 import musicSdk from '@renderer/utils/musicSdk'
 import {
   // getOtherSource as getOtherSourceFromStore,
@@ -9,8 +8,8 @@ import {
 } from '@renderer/utils/ipc'
 import { appSetting } from '@renderer/store/setting'
 import { langS2T, toNewMusicInfo, toOldMusicInfo } from '@renderer/utils'
-import { requestMsg } from '@renderer/utils/message'
 import { apis } from '@renderer/utils/musicSdk/api-source'
+import { buildBackupApiIds, isProviderServable, type SourceRotationEnv } from './sourceRotation'
 
 
 const getOtherSourcePromises = new Map()
@@ -220,10 +219,11 @@ export const getOnlineOtherSourcePicByLocal = async(musicInfo: LX.Music.MusicInf
 
 export const TRY_QUALITYS_LIST = ['flac24bit', 'flac', '320k'] as const
 type TryQualityType = typeof TRY_QUALITYS_LIST[number]
-export const getPlayQuality = (highQuality: LX.Quality, musicInfo: LX.Music.MusicInfoOnline): LX.Quality => {
+export const getPlayQuality = (highQuality: LX.Quality, musicInfo: LX.Music.MusicInfoOnline, apiId?: string): LX.Quality => {
   let type: LX.Quality = '128k'
   if (TRY_QUALITYS_LIST.includes(highQuality as TryQualityType)) {
-    let list = qualityList.value[musicInfo.source]
+    // 指定 apiId 时按该音源自己的可用音质取档（备源与主源支持的档位可能不同）
+    let list = apiId == null ? qualityList.value[musicInfo.source] : userApi.qualityLists[apiId]?.[musicInfo.source]
 
     let t = TRY_QUALITYS_LIST
       .slice(TRY_QUALITYS_LIST.indexOf(highQuality as TryQualityType))
@@ -234,10 +234,81 @@ export const getPlayQuality = (highQuality: LX.Quality, musicInfo: LX.Music.Musi
   return type
 }
 
-export const getOnlineOtherSourceMusicUrl = async({ musicInfos, quality, onToggleSource, isRefresh, retryedSource = [] }: {
+/** 当前音源轮换环境快照（主源 + 已就绪备源及其服务的提供方） */
+const sourceRotationEnv = (): SourceRotationEnv => {
+  const primaryApiId = appSetting['common.apiSource']
+  const readyApiIds: string[] = []
+  const servedProviders: Record<string, string[]> = {}
+  for (const apiId of Object.keys(userApi.apis)) {
+    const qualitys = userApi.qualityLists[apiId]
+    if (!qualitys) continue
+    readyApiIds.push(apiId)
+    servedProviders[apiId] = Object.keys(qualitys)
+  }
+  return {
+    primaryApiId,
+    primaryServedProviders: Object.keys(qualityList.value),
+    backupApiIds: [...appSetting['common.apiSourceBackups']],
+    readyApiIds,
+    servedProviders,
+  }
+}
+
+/** 通过指定音源取流（apiId 为空走主源默认路径） */
+const fetchMusicUrlByApi = async(musicInfo: LX.Music.MusicInfoOnline, quality: LX.Quality, apiId?: string): Promise<{ url: string, type: LX.Quality }> => {
+  let reqPromise: Promise<{ url: string, type: LX.Quality }> | null = null
+  try {
+    if (apiId) {
+      const handler = apis(musicInfo.source, apiId)
+      if (handler?.getMusicUrl) reqPromise = handler.getMusicUrl(toOldMusicInfo(musicInfo), quality).promise
+    } else {
+      reqPromise = musicSdk[musicInfo.source].getMusicUrl(toOldMusicInfo(musicInfo), quality).promise
+    }
+  } catch (err: any) {
+    reqPromise = Promise.reject(err)
+  }
+  return reqPromise ?? Promise.reject(new Error('api is not found'))
+}
+
+/**
+ * 主源失败后按序轮换备源（提供方内层）。429 限流与普通失败同样立即切下一个源，不做同源等待重试。
+ * allowToggleSource 为 false 时不轮换（保持既有语义：换源重放分支与关闭自动换源的下载不切换）。
+ */
+const fetchMusicUrlWithRotation = async({ musicInfo, quality, onToggleApiSource, allowToggleSource }: {
+  musicInfo: LX.Music.MusicInfoOnline
+  quality?: LX.Quality
+  onToggleApiSource?: () => void
+  allowToggleSource: boolean
+}): Promise<{ url: string, quality: LX.Quality }> => {
+  const primaryQuality = quality ?? getPlayQuality(appSetting['player.playQuality'], musicInfo)
+  let firstError: any
+  try {
+    const { url, type } = await fetchMusicUrlByApi(musicInfo, primaryQuality)
+    return { url, quality: type }
+  } catch (err: any) {
+    firstError = err
+    console.log(err)
+  }
+  if (!allowToggleSource) throw firstError
+  for (const apiId of buildBackupApiIds(sourceRotationEnv(), musicInfo.source)) {
+    const itemQuality = quality ?? getPlayQuality(appSetting['player.playQuality'], musicInfo, apiId)
+    if (!musicInfo.meta._qualitys[itemQuality]) continue
+    onToggleApiSource?.()
+    try {
+      const { url, type } = await fetchMusicUrlByApi(musicInfo, itemQuality, apiId)
+      return { url, quality: type }
+    } catch (err: any) {
+      console.log(err)
+    }
+  }
+  throw firstError
+}
+
+export const getOnlineOtherSourceMusicUrl = async({ musicInfos, quality, onToggleSource, onToggleApiSource, isRefresh, retryedSource = [] }: {
   musicInfos: LX.Music.MusicInfoOnline[]
   quality?: LX.Quality
   onToggleSource: (musicInfo?: LX.Music.MusicInfoOnline) => void
+  onToggleApiSource?: () => void
   isRefresh: boolean
   retryedSource?: LX.OnlineSource[]
 }): Promise<{
@@ -248,13 +319,15 @@ export const getOnlineOtherSourceMusicUrl = async({ musicInfos, quality, onToggl
 }> => {
   if (!await window.lx.apiInitPromise[0]) throw new Error('source init failed')
 
+  const env = sourceRotationEnv()
   let musicInfo: LX.Music.MusicInfoOnline | null = null
   let itemQuality: LX.Quality | null = null
   // eslint-disable-next-line no-cond-assign
   while (musicInfo = (musicInfos.shift()!)) {
     if (retryedSource.includes(musicInfo.source)) continue
     retryedSource.push(musicInfo.source)
-    if (!assertApiSupport(musicInfo.source)) continue
+    // 主源或任一备源可服务即不跳过（仅主源不支持的平台可能由备源救回）
+    if (!isProviderServable(env, musicInfo.source)) continue
     itemQuality = quality ?? getPlayQuality(appSetting['player.playQuality'], musicInfo)
     if (!musicInfo.meta._qualitys[itemQuality]) continue
 
@@ -267,33 +340,26 @@ export const getOnlineOtherSourceMusicUrl = async({ musicInfos, quality, onToggl
   const cachedUrl = await getStoreMusicUrl(musicInfo, itemQuality)
   if (cachedUrl && !isRefresh) return { url: cachedUrl, musicInfo, quality: itemQuality, isFromCache: true }
 
-  let reqPromise
+  // 提供方内层：主源 → 备源按序轮换；穷尽后递归下一个候选提供方
   try {
-    reqPromise = musicSdk[musicInfo.source].getMusicUrl(toOldMusicInfo(musicInfo), itemQuality).promise
-  } catch (err: any) {
-    reqPromise = Promise.reject(err)
-  }
-  // retryedSource.includes(musicInfo.source)
-  // eslint-disable-next-line @typescript-eslint/promise-function-async
-  return reqPromise.then(({ url, type }: { url: string, type: LX.Quality }) => {
+    const { url, quality: type } = await fetchMusicUrlWithRotation({ musicInfo, quality, onToggleApiSource, allowToggleSource: true })
     return { musicInfo, url, quality: type, isFromCache: false }
-    // eslint-disable-next-line @typescript-eslint/promise-function-async
-  }).catch((err: any) => {
-    if (err.message == requestMsg.tooManyRequests) throw err
+  } catch (err: any) {
     console.log(err)
-    return getOnlineOtherSourceMusicUrl({ musicInfos, quality, onToggleSource, isRefresh, retryedSource })
-  })
+    return getOnlineOtherSourceMusicUrl({ musicInfos, quality, onToggleSource, onToggleApiSource, isRefresh, retryedSource })
+  }
 }
 
 /**
  * 获取在线音乐URL
  */
-export const handleGetOnlineMusicUrl = async({ musicInfo, quality, onToggleSource, isRefresh, allowToggleSource }: {
+export const handleGetOnlineMusicUrl = async({ musicInfo, quality, onToggleSource, onToggleApiSource, isRefresh, allowToggleSource }: {
   musicInfo: LX.Music.MusicInfoOnline
   quality?: LX.Quality
   isRefresh: boolean
   allowToggleSource: boolean
   onToggleSource: (musicInfo?: LX.Music.MusicInfoOnline) => void
+  onToggleApiSource?: () => void
 }): Promise<{
   url: string
   musicInfo: LX.Music.MusicInfoOnline
@@ -302,19 +368,14 @@ export const handleGetOnlineMusicUrl = async({ musicInfo, quality, onToggleSourc
 }> => {
   if (!await window.lx.apiInitPromise[0]) throw new Error('source init failed')
   // console.log(musicInfo.source)
-  const targetQuality = quality ?? getPlayQuality(appSetting['player.playQuality'], musicInfo)
-
-  let reqPromise
+  // 提供方内层：先穷尽本提供方的所有启用音源（主源 → 备源按序）
   try {
-    reqPromise = musicSdk[musicInfo.source].getMusicUrl(toOldMusicInfo(musicInfo), targetQuality).promise
-  } catch (err: any) {
-    reqPromise = Promise.reject(err)
-  }
-  return reqPromise.then(({ url, type }: { url: string, type: LX.Quality }) => {
+    const { url, quality: type } = await fetchMusicUrlWithRotation({ musicInfo, quality, onToggleApiSource, allowToggleSource })
     return { musicInfo, url, quality: type, isFromCache: false }
-  }).catch(async(err: any) => {
+  } catch (err: any) {
     console.log(err)
-    if (!allowToggleSource || err.message == requestMsg.tooManyRequests) throw err
+    if (!allowToggleSource) throw err
+    // 提供方外层：切换到其他提供方的同曲变体（findMusic 候选，按音质丰富度排序）
     onToggleSource()
     // eslint-disable-next-line @typescript-eslint/promise-function-async
     return getOtherSource(musicInfo).then(otherSource => {
@@ -323,6 +384,7 @@ export const handleGetOnlineMusicUrl = async({ musicInfo, quality, onToggleSourc
         return getOnlineOtherSourceMusicUrl({
           musicInfos: [...otherSource],
           onToggleSource,
+          onToggleApiSource,
           quality,
           isRefresh,
           retryedSource: [musicInfo.source],
@@ -330,7 +392,7 @@ export const handleGetOnlineMusicUrl = async({ musicInfo, quality, onToggleSourc
       }
       throw err
     })
-  })
+  }
 }
 
 

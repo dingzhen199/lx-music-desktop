@@ -127,6 +127,9 @@ export const importUserApi = async(fileText: string) => {
 export const setUserApi = async(source: LX.UserApi.UserApiSetApiParams): Promise<void> => {
   return rendererInvoke<LX.UserApi.UserApiSetApiParams>(WIN_MAIN_RENDERER_EVENT_NAME.set_user_api, source)
 }
+export const setUserApiBackups = async(apiIds: LX.UserApi.UserApiSetApiBackupsParams): Promise<void> => {
+  return rendererInvoke<LX.UserApi.UserApiSetApiBackupsParams>(WIN_MAIN_RENDERER_EVENT_NAME.set_user_api_backups, apiIds)
+}
 export const removeUserApi = async(ids: string[]) => {
   return rendererInvoke<string[], LX.UserApi.UserApiInfo[]>(WIN_MAIN_RENDERER_EVENT_NAME.remove_user_api, ids)
 }

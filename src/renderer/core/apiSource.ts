@@ -1,6 +1,6 @@
 import { apiSource, qualityList, userApi } from '@renderer/store'
 import { appSetting, setApiSource } from '@renderer/store/setting'
-import { setUserApi as setUserApiAction } from '@renderer/utils/ipc'
+import { setUserApi as setUserApiAction, setUserApiBackups as setUserApiBackupsAction } from '@renderer/utils/ipc'
 import musicSdk from '@renderer/utils/musicSdk'
 import apiSourceInfo from '@renderer/utils/musicSdk/api-source-info'
 
@@ -45,4 +45,12 @@ export const setUserApi = async(apiId: string) => {
 
   if (prevId != apiId) return
   if (apiId != appSetting['common.apiSource']) setApiSource(apiId)
+}
+
+/** 装载/卸载备源窗口（主源不受影响；顺序即播放取流失败时的轮换顺序） */
+export const setUserApiBackups = async(apiIds: string[]) => {
+  // 展开为普通数组：响应式数组（Proxy）无法被 IPC 结构化克隆
+  await setUserApiBackupsAction([...apiIds]).catch(err => {
+    console.log(err)
+  })
 }

@@ -3,7 +3,7 @@ import { isFullscreen, proxy, sync, windowSizeList } from '@renderer/store'
 import { appSetting } from '@renderer/store/setting'
 import { sendSyncAction, setWindowSize } from '@renderer/utils/ipc'
 import { setLanguage } from '@root/lang'
-import { setUserApi } from '../apiSource'
+import { setUserApi, setUserApiBackups } from '../apiSource'
 // import { applyTheme, getThemes } from '@renderer/store/utils'
 
 
@@ -25,6 +25,10 @@ export default () => {
 
   watch(() => appSetting['common.apiSource'], apiSource => {
     void setUserApi(apiSource)
+  })
+
+  watch(() => appSetting['common.apiSourceBackups'], backups => {
+    void setUserApiBackups(backups)
   })
 
   watch(() => appSetting['common.font'], (val) => {
