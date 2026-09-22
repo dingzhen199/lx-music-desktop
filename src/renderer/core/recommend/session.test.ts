@@ -61,6 +61,51 @@ beforeEach(async() => {
 afterEach(() => { session.endSession(); vi.useRealTimers(); vi.unstubAllGlobals() })
 
 describe('会话与播放队列竞态', () => {
+  it('收台只删除推荐入队实例，保留用户手动加入的同 ID 项', async() => {
+    mocks.explore.mockResolvedValueOnce(result('song'))
+    await session.startSession()
+    const manual = { listId: 'manual-list', musicInfo: mocks.queue[0].musicInfo }
+    mocks.queue.push(manual)
+    expect(session.sessionView.value.remaining).toBe(1)
+    session.endSession()
+    expect(mocks.queue).toEqual([manual])
+  })
+
+  it('重锚只清旧会话的推荐实例，保留手动项', async() => {
+    mocks.explore.mockResolvedValueOnce(result('song'))
+    await session.startSession()
+    const manual = { listId: 'manual-list', musicInfo: mocks.queue[0].musicInfo }
+    mocks.queue.push(manual)
+    mocks.player.musicInfo = { id: 'new-anchor', singer: 'New Artist', name: 'New Anchor', meta: {} }
+    mocks.explore.mockResolvedValueOnce(result('new-song'))
+    await session.startSession()
+    expect(mocks.queue).toContain(manual)
+    expect(mocks.queue.map(item => item.musicInfo.id)).toEqual(['song', 'new-song'])
+  })
+
+  it('路径跳播优先消费推荐实例，不消费先到的手动同 ID 项', async() => {
+    mocks.explore.mockResolvedValueOnce(result('song'))
+    await session.startSession()
+    const manual = { listId: 'manual-list', musicInfo: mocks.queue[0].musicInfo }
+    mocks.queue.unshift(manual)
+    session.playPathItem('song')
+    expect(mocks.queue).toEqual([manual])
+  })
+
+  it('请求期间新增的手动同曲项在提交前去重，不登记为推荐归属', async() => {
+    let resolvePlan!: (value: ExploreResult) => void
+    mocks.explore.mockImplementationOnce(async() => new Promise(resolve => { resolvePlan = resolve }))
+    const pending = session.startSession()
+    const manual = { listId: 'manual-list', musicInfo: { id: 'tx_song', singer: 'Artist', name: 'song', source: 'tx', meta: {} } }
+    mocks.queue.push(manual)
+    resolvePlan(result('song'))
+    await pending
+    expect(mocks.queue).toEqual([manual])
+    expect(session.sessionView.value.path).toEqual([])
+    expect(session.sessionView.value.recommendedIds).toEqual([])
+    expect(mocks.addQueue).not.toHaveBeenCalled()
+  })
+
   it('旧计划返回后不入队，也不删除新会话同 id 的歌曲', async() => {
     let resolveOld!: (value: ExploreResult) => void
     mocks.explore.mockImplementationOnce(async() => new Promise(resolve => { resolveOld = resolve }))

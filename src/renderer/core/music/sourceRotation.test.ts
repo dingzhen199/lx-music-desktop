@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildBackupApiIds, isProviderServable, type SourceRotationEnv } from './sourceRotation'
+import { buildBackupApiIds, isProviderServable, isProviderChanged, type SourceRotationEnv } from './sourceRotation'
 
 const buildEnv = (overrides: Partial<SourceRotationEnv> = {}): SourceRotationEnv => ({
   primaryApiId: 'user_api_a',
@@ -14,6 +14,12 @@ const buildEnv = (overrides: Partial<SourceRotationEnv> = {}): SourceRotationEnv
 })
 
 describe('音源轮换编排', () => {
+  it('只有提供方变化才触发歌曲版本写回', () => {
+    expect(isProviderChanged('wy', 'tx')).toBe(true)
+    expect(isProviderChanged('wy', 'wy')).toBe(false)
+    expect(isProviderChanged('wy', null)).toBe(false)
+  })
+
   it('备源按用户排序输出，主源不在其列', () => {
     const env = buildEnv()
     expect(buildBackupApiIds(env, 'tx')).toStrictEqual(['user_api_b'])

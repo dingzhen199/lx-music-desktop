@@ -114,10 +114,12 @@ describe('平台推荐默认路径：零 LLM 与无静默回退（AC3）', () =>
     expect(refillOptions.excludeIds).toContain('wy_1')
   })
 
-  it('反馈（喜欢/不再推荐）0 次 LLM；不再推荐曲目进入后续召回排除', async() => {
+  it('反馈（喜欢/不再推荐）0 次 LLM；喜欢进入平台画像加成，不再推荐进入后续召回排除', async() => {
     await session.startSession()
     session.applyFeedback('good')
     await vi.advanceTimersByTimeAsync(1200)
+    const afterGood = mocks.platformRecall.mock.calls[1][1]
+    expect(afterGood.profileBoost('周杰伦')).toBe(10)
     session.applyFeedback('dislike')
     await vi.advanceTimersByTimeAsync(1200)
     expect(mocks.llm).not.toHaveBeenCalled()

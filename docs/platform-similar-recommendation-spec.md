@@ -1,6 +1,6 @@
 # 平台相似歌曲聚合推荐需求
 
-日期：2026-09-20  
+日期：2026-09-20
 状态：待实现；供 subagent 执行。平台端点、登录要求、覆盖率及实际推荐效果尚未验证。
 
 ## 1. 目标与决策
@@ -204,9 +204,9 @@
 ```sh
 npm test
 npm run lint
-npx tsc --noEmit -p src/main/tsconfig.json
-npx tsc --noEmit -p src/renderer/tsconfig.json
+npm run typecheck
 npm run build
+npm run test:e2e
 ```
 
 真实效果小样本记录：选约 20 首覆盖不同艺人、语言、热门/冷门及版本的起点，比较单平台与聚合的前几首；记录同曲匹配成功率、有效候选数、重复/同艺人集中程度、耗时，以及人工是否愿意接着听。样本用于发现问题，不宣称统计上证明聚合更好。若缺少用户试听，仅报告客观结果与待试听清单。

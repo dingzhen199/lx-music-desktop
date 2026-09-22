@@ -1,10 +1,10 @@
-import { closeWindow } from './main'
 import { getUserApis, importApi as handleImportApi, removeApi as handleRemoveApi, setAllowShowUpdateAlert as saveAllowShowUpdateAlert } from './utils'
 import {
   init,
   setApi as setRendererEventApi,
   setBackups as setRendererEventBackups,
   unloadApi,
+  unloadAllApis,
   setAllowShowUpdateAlert as setRendererEventAllowShowUpdateAlert,
 } from './rendererEvent/rendererEvent'
 
@@ -37,6 +37,6 @@ export default () => {
   init()
 
   global.lx.event_app.on('main_window_close', () => {
-    void closeWindow()
+    void unloadAllApis().catch(err => { console.log(err) })
   })
 }

@@ -32,7 +32,7 @@ dd
   div
     .p.small
       | {{ $t('setting__recommend_tip') }}
-    .p
+    .p(v-if="!isPlatformEngine")
       | {{ $t('setting__recommend_radius') }}
       base-slider-bar.gap-left(:class="$style.radiusSlider" :value="appSetting['recommend.radius']" :min="10" :max="90" :step="5" @change="setRadius")
       span.gap-left {{ appSetting['recommend.radius'] }}
@@ -47,7 +47,7 @@ import { appSetting, updateSetting } from '@renderer/store/setting'
 import { debounce } from '@common/utils'
 import { computed, ref } from '@common/utils/vueTools'
 import { useI18n } from '@renderer/plugins/i18n'
-import { LLM_MAX_CONCURRENCY, normalizeLlmConcurrency } from '@common/recommendationConfig'
+import { LLM_MAX_CONCURRENCY, normalizeLlmConcurrency, normalizeRecommendEngine } from '@common/recommendationConfig'
 import { llmComplete } from '@renderer/core/recommend/llm'
 
 export default {
@@ -59,6 +59,7 @@ export default {
       { id: 'anthropic', name: 'Anthropic' },
     ]
     const concurrency = computed(() => normalizeLlmConcurrency(appSetting['ai.maxConcurrentRequests']))
+    const isPlatformEngine = computed(() => normalizeRecommendEngine(appSetting['recommend.engine']) === 'platform')
     const concurrencyList = Array.from({ length: LLM_MAX_CONCURRENCY }, (_, i) => ({ id: i + 1, name: String(i + 1) }))
     const setConcurrency = value => { updateSetting({ 'ai.maxConcurrentRequests': normalizeLlmConcurrency(value) }) }
     const setBaseUrl = debounce(value => {
@@ -125,6 +126,7 @@ export default {
       t,
       providerList,
       concurrency,
+      isPlatformEngine,
       concurrencyList,
       setConcurrency,
       setBaseUrl,

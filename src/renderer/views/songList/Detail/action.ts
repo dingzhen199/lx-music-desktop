@@ -25,7 +25,8 @@ export const addSongListDetail = async(id: string, source: LX.OnlineSource, name
       confirmButtonText: window.i18n.t('confirm_button_text'),
     })
     if (!confirm) return
-    void syncSourceList(targetList)
+    // 同步失败会写入列表更新错误；这里消费拒绝，避免重复收藏操作产生 unhandled rejection。
+    await syncSourceList(targetList).catch(() => {})
     return
   }
 

@@ -1,7 +1,12 @@
 # e2e（Playwright × Electron）
 
-针对 T-A1~T-A3 / T-B0~T-B2 新能力的端到端测试。测试对象为 **dist 生产构建**（先运行
-`npm run build:main && npm run build:renderer && npm run build:renderer-lyric && npm run build:renderer-scripts`）。
+针对 T-A1~T-A3 / T-B0~T-B2 新能力的端到端测试，测试对象为 **dist 生产构建**。
+当前可执行回归门禁是 `npm run test:e2e`，它会先构建并依次运行平台推荐、电台、歌单同步和多活音源四条链路。
+单项脚本可在构建后分别执行 `npm run test:e2e:platform`、`npm run test:e2e:radio`、
+`npm run test:e2e:sync`、`npm run test:e2e:user-api`。
+
+单独运行脚本前先运行
+`npm run build:main && npm run build:renderer && npm run build:renderer-lyric && npm run build:renderer-scripts`。
 
 > **⚠ 电台化演进后的过时声明（2026-09-13，探索电台 TT-1~TT-5 合入后）**
 > 本目录脚本的 T-B1/T-B2 断言尚未适配电台语义，已知失效点：
@@ -12,7 +17,8 @@
 > - 首计划与续补统一追加稍后播放**队尾**（不再置顶），任何断言队列头部顺序的校验需复核。
 > - "结束会话"按钮现在经设置项（`recommend.radio`）单源收台并清场，行为结果不变（回空态）但链路不同。
 > 在上述断言完成适配前，`e2e/e2e.js`、`e2e/deep.js`、`e2e/ai.js` 对电台相关场景的结果不可作为回归依据；
-> 适配工作单独立项（定位器改状态无关选择器 + 流程预期按电台状态机重写）。
+> 它们保留为历史探索脚本，不纳入 `npm run test:e2e`。当前门禁使用已经适配的
+> `platform.js`、`radio.js`、`sync.js` 和 `userApiBackups.js`。
 > `e2e/common.js`、`e2e/smoke.js`、`e2e/sync.js` 与 sameSong 相关断言不涉及上述触面。
 
 ## 运行
@@ -25,7 +31,7 @@ node e2e/ai.js     # T-B1：mock LLM（e2e/mockLlm.js）→ 设置 AI → AI 计
 node e2e/radio.js  # 探索电台（TT-1~TT-5）：跟歌重锚/约束作废/本地引擎/断网失败收台/指标落盘/重启自动开台（预写 recommend.engine='local'）
 node e2e/platform.js  # 平台相似推荐（默认引擎，零 LLM）：平台推荐标识/隐藏距离与约束控件/喜欢与不再推荐反馈/来源理由/设置页不依赖 AI
 node e2e/common.js  # 常用功能回归：导航/搜索/播放控制/播放详情/桌面歌词/我的列表 CRUD/收藏/榜单/设置 tab
-node e2e/userApiBackups.js  # 多活音源（ADR-0003）：预置双假源（主源必失败/备源返回本地音频）→ 双窗口装载/源管理 UI 勾选与持久化/播放回退链（主源✗→换提供方→备源✓）/写回我的列表
+node e2e/userApiBackups.js  # 多活音源（ADR-0003）：双假源/源管理/回退取流/两首列表写回后持续播放/macOS 重开窗口恢复/主进程与渲染进程异常检查
 node e2e/smoke.js  # 仅冒烟：启动+页面文本+错误采集
 ```
 
@@ -68,4 +74,3 @@ node e2e/smoke.js  # 仅冒烟：启动+页面文本+错误采集
 漂移由 `e2e/sameSongRules.test.js` 兜底（`npm test` 自动收集）：用共享语料逐例比对两侧判定——
 真实 artist 顺序/合作者变体、全部分隔符、大小写与空白差异、空艺人、`(Live)` 版本、同名异曲。
 **改动任一侧的同曲规则后必须跑 `npm test`，不一致会直接红。**
-

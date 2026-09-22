@@ -15,6 +15,13 @@ let primaryApiId: string | null = null
 let backupApiIds: string[] = []
 const requestQueue = new Map()
 const timeouts = new Map<string, NodeJS.Timeout>()
+// 主源、备源及关窗操作串行执行，避免重开窗口与上一轮销毁交错。
+let windowUpdate: Promise<void> = Promise.resolve()
+const updateWindows = async(action: () => Promise<void>) => {
+  const next = windowUpdate.then(action)
+  windowUpdate = next.catch(() => {})
+  return next
+}
 interface InitParams {
   event: Electron.IpcMainEvent
   params: {
@@ -108,7 +115,14 @@ export const loadApi = async(apiId: string) => {
   loadedApis.set(apiId, targetApi)
   console.log('load api', targetApi.name)
   if (hasWindow(apiId)) return
-  await createWindow(targetApi)
+  apiStatusMap.delete(apiId)
+  try {
+    await createWindow(targetApi)
+  } catch (err) {
+    loadedApis.delete(apiId)
+    await closeWindow(apiId)
+    throw err
+  }
 }
 
 export const unloadApi = async(apiId: string) => {
@@ -120,9 +134,9 @@ export const unloadApi = async(apiId: string) => {
 
 /** 按需增删音源窗口：需要保留的 = 主源 ∪ 备源，其余卸载；主源加载失败向上抛（渲染层有回退逻辑），备源尽力而为 */
 const reconcileWindows = async() => {
-  if (primaryApiId && !loadedApis.has(primaryApiId)) await loadApi(primaryApiId)
+  if (primaryApiId && !hasWindow(primaryApiId)) await loadApi(primaryApiId)
   for (const apiId of backupApiIds) {
-    if (apiId && apiId != primaryApiId && !loadedApis.has(apiId)) await loadApi(apiId).catch(err => { console.log(err) })
+    if (apiId && apiId != primaryApiId && !hasWindow(apiId)) await loadApi(apiId).catch(err => { console.log(err) })
   }
   const keepIds = new Set([primaryApiId, ...backupApiIds].filter((id): id is string => !!id))
   for (const apiId of [...loadedApis.keys()]) {
@@ -130,9 +144,11 @@ const reconcileWindows = async() => {
   }
 }
 
-export const setApi = async(apiId: string) => {
-  if (apiId && !getUserApis().some(api => api.id == apiId)) throw new Error('api not found')
-  primaryApiId = apiId || null
+export const setApi = async(apiId: string) => updateWindows(async() => {
+  // temp/内置源由渲染端处理，主进程只装载自定义脚本。
+  const isUserApi = /^user_api/.test(apiId)
+  if (isUserApi && !getUserApis().some(api => api.id == apiId)) throw new Error('api not found')
+  primaryApiId = isUserApi ? apiId : null
   await reconcileWindows()
   if (!primaryApiId) {
     sendStatusChange({ status: false, message: 'api id is null' })
@@ -141,12 +157,26 @@ export const setApi = async(apiId: string) => {
   // 主源切换到已初始化的窗口时不会有新的 init 事件，补发缓存的状态让渲染层更新 qualityList
   const cachedStatus = apiStatusMap.get(primaryApiId)
   if (cachedStatus) sendStatusChange(cachedStatus)
-}
+})
 
-export const setBackups = async(apiIds: string[]) => {
-  backupApiIds = [...apiIds]
+export const setBackups = async(apiIds: string[]) => updateWindows(async() => {
+  backupApiIds = [...new Set(apiIds)]
   await reconcileWindows()
-}
+  // 渲染窗口重载后也需要收到已有备源的初始化信息。
+  for (const id of backupApiIds) {
+    const status = apiStatusMap.get(id)
+    if (status) sendStatusChange(status)
+  }
+})
+
+export const unloadAllApis = async() => updateWindows(async() => {
+  primaryApiId = null
+  backupApiIds = []
+  loadedApis.clear()
+  apiStatusMap.clear()
+  for (const key of requestQueue.keys()) cancelRequest(key)
+  await closeWindow()
+})
 
 export const getStatus = (): LX.UserApi.UserApiStatus => primaryApiId ? (apiStatusMap.get(primaryApiId) ?? { status: false }) : { status: false }
 

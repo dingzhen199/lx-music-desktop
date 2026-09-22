@@ -14,6 +14,8 @@ declare namespace LX {
         * 是否属于 “稍后播放”
         */
       isTempPlay: boolean
+      /** 推荐实际入队时的会话代际；手动入队不携带。 */
+      recommendationSessionId?: number
     }
 
     interface PlayInfo {
@@ -44,6 +46,8 @@ declare namespace LX {
        * 是否添加到列表顶部
        */
       isTop?: boolean
+      /** 推荐实际入队时的会话代际；手动入队不携带。 */
+      recommendationSessionId?: number
     }
 
     interface SavedPlayInfo {

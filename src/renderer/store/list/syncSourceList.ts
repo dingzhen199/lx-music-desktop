@@ -30,15 +30,15 @@ export default async(targetListInfo: LX.List.UserListInfo) => {
   if (!targetListInfo.source || !targetListInfo.sourceListId) return
   try {
     const list = await fetchList(targetListInfo.id, targetListInfo.source, targetListInfo.sourceListId)
-    // console.log(list)
-    void overwriteListMusics({ listId: targetListInfo.id, musicInfos: list })
+    // 只有歌曲实际落库成功后才记录成功时间；否则下次启动会错误跳过更新。
+    await overwriteListMusics({ listId: targetListInfo.id, musicInfos: list })
     const now = Date.now()
-    void setListUpdateTime(targetListInfo.id, now)
-    void setListUpdateError(targetListInfo.id, null)
+    await setListUpdateTime(targetListInfo.id, now)
+    await setListUpdateError(targetListInfo.id, null)
     setUpdateTime(targetListInfo.id, dateFormat(now))
   } catch (err) {
     // 更新失败时记录错误信息，保留本地旧数据，等待下次启动自动更新时重试
-    void setListUpdateError(targetListInfo.id, getErrorMsg(err))
+    await setListUpdateError(targetListInfo.id, getErrorMsg(err)).catch(() => {})
     throw err
   }
 }

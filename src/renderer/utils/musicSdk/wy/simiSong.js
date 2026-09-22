@@ -77,15 +77,18 @@ export default {
    * @param {string|number} songId wy 数字歌曲 id（与搜索结果 songmid 同一标识）
    * @returns {Promise<{ source: 'wy', list: Array }>} 归一化为与搜索结果同构的列表（可直接 toNewMusicInfo）
    */
-  async getSimiSong(songId) {
+  getSimiSong(songId) {
     const requestObj = eapiRequest('/api/v1/discovery/simiSong', {
       songid: Number(songId),
     })
-    const { body, statusCode } = await requestObj.promise
-    if (statusCode != 200 || body?.code !== 200) {
-      // P0 实测：不存在的 id 也返回 code 200 + 空 songs；非 200 视为请求失败
-      throw new Error('获取相似歌曲失败')
-    }
-    return { source: 'wy', list: this.handleResult(body.songs ?? []) }
+    const promise = requestObj.promise.then(({ body, statusCode }) => {
+      if (statusCode != 200 || body?.code !== 200) {
+        // P0 实测：不存在的 id 也返回 code 200 + 空 songs；非 200 视为请求失败
+        throw new Error('获取相似歌曲失败')
+      }
+      return { source: 'wy', list: this.handleResult(body.songs ?? []) }
+    })
+    promise.cancel = () => requestObj.cancelHttp?.()
+    return promise
   },
 }

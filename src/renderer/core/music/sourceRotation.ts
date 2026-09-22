@@ -19,6 +19,14 @@ export interface SourceRotationEnv {
   servedProviders: Record<string, string[]>
 }
 
+/** 只有提供方发生变化才需要写回歌曲；同一提供方的 id 变体仍属于当前版本。 */
+export const isProviderChanged = (
+  originalSource?: string | null,
+  targetSource?: string | null,
+): boolean => {
+  return Boolean(originalSource && targetSource && originalSource !== targetSource)
+}
+
 /**
  * 某提供方可用的备源序列：按用户排序、去重、已就绪、且该源服务此提供方；主源不在其列
  * （主源永远是最先尝试的一次，由调用方先行完成）。

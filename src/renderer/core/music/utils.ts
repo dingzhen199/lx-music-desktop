@@ -280,9 +280,10 @@ const fetchMusicUrlWithRotation = async({ musicInfo, quality, onToggleApiSource,
   onToggleApiSource?: () => void
   allowToggleSource: boolean
 }): Promise<{ url: string, quality: LX.Quality }> => {
-  const primaryQuality = quality ?? getPlayQuality(appSetting['player.playQuality'], musicInfo)
   let firstError: any
   try {
+    if (!await window.lx.apiInitPromise[0]) throw new Error('source init failed')
+    const primaryQuality = quality ?? getPlayQuality(appSetting['player.playQuality'], musicInfo)
     const { url, type } = await fetchMusicUrlByApi(musicInfo, primaryQuality)
     return { url, quality: type }
   } catch (err: any) {
@@ -317,7 +318,7 @@ export const getOnlineOtherSourceMusicUrl = async({ musicInfos, quality, onToggl
   quality: LX.Quality
   isFromCache: boolean
 }> => {
-  if (!await window.lx.apiInitPromise[0]) throw new Error('source init failed')
+  await window.lx.apiInitPromise[0]
 
   const env = sourceRotationEnv()
   let musicInfo: LX.Music.MusicInfoOnline | null = null
@@ -366,7 +367,6 @@ export const handleGetOnlineMusicUrl = async({ musicInfo, quality, onToggleSourc
   quality: LX.Quality
   isFromCache: boolean
 }> => {
-  if (!await window.lx.apiInitPromise[0]) throw new Error('source init failed')
   // console.log(musicInfo.source)
   // 提供方内层：先穷尽本提供方的所有启用音源（主源 → 备源按序）
   try {

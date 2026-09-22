@@ -39,7 +39,7 @@ export const setUserApi = async(apiId: string) => {
     // @ts-expect-error
     qualityList.value = musicSdk.supportQuality[apiId] ?? {}
     apiSource.value = apiId
-    void setUserApiAction(apiId)
+    void setUserApiAction(apiId).catch(err => { console.log(err) })
     if (!window.lx.apiInitPromise[1]) window.lx.apiInitPromise[2](true)
   }
 

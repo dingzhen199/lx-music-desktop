@@ -31,6 +31,7 @@ import type { PlatformRecallAnchor, PlatformRecallState } from './platformRecall
 import { parseIntervalSec } from './seedMatch'
 import { startFeatureCollection, stopFeatureCollection } from './feature'
 import { sameSong } from './sameSong'
+import { filterQueuedResult } from './queue'
 import type { RankPathInput, TrackAnalysis } from './prompts'
 import { getProfileState, onProfileSignal, recordRecommendedSkip } from './profile'
 import { decideEndorsement, localBonus } from './profile-core'
@@ -223,17 +224,15 @@ const outstandingRecommendedIds = (st: SessionState): string[] => {
   const out: string[] = []
   for (const item of tempPlayList) {
     const id = item?.musicInfo?.id
-    if (id && recommended.has(id)) out.push(id)
+    if (id && item.recommendationSessionId === epoch && recommended.has(id)) out.push(id)
   }
   return out
 }
 
-/** 按 id 从稍后播放队列移除条目（从后往前删避免索引漂移）。 */
-const removeTempByIds = (ids: string[]): void => {
-  const set = new Set(ids.map(id => String(id)))
+/** 只清理由本代际实际插入的队列实例，保留手动加入的同 ID/同曲项。 */
+const clearRecommendedQueue = (): void => {
   for (let i = tempPlayList.length - 1; i >= 0; i--) {
-    const id = tempPlayList[i]?.musicInfo?.id
-    if (id && set.has(String(id))) removeTempPlayList(i)
+    if (tempPlayList[i].recommendationSessionId === epoch) removeTempPlayList(i)
   }
 }
 
@@ -316,6 +315,23 @@ const toRecentPath = (st: SessionState): RankPathInput[] => {
   }))
 }
 
+const primaryArtistKey = (artist: string): string => {
+  return String(artist ?? '').split(/[,、，/&;；|]+/)[0]?.trim().toLowerCase() ?? ''
+}
+
+/** 平台模式的显式「喜欢」反馈：作为有界艺人加成进入平台融合，不改变外部画像。 */
+const buildPlatformProfileBoost = (st: SessionState): ((artist: string) => number) => {
+  const positiveArtists = new Set(
+    st.positiveArtists
+      .map(primaryArtistKey)
+      .filter(Boolean),
+  )
+  return (artist: string) => {
+    const base = localBonus(getProfileState(), artist)
+    return positiveArtists.has(primaryArtistKey(artist)) ? Math.max(10, base) : base
+  }
+}
+
 /** 拼 exploreOnce 选项：锚点始终沿会话起点，反馈拼进 instruction。 */
 const buildExploreOptions = (mode: 'initial' | 'refill'): ExploreOptions | null => {
   const st = state.value
@@ -383,7 +399,7 @@ const buildPlatformOptions = (mode: 'initial' | 'refill'): PlatformExploreOption
     appendMode: 'bottom',
     dislikedTracks: st.dislikedTracks,
     // 本地画像有界次级调整（fusion 内 clamp ±15%，来源排名仍主导）
-    profileBoost: (artist: string) => localBonus(getProfileState(), artist),
+    profileBoost: buildPlatformProfileBoost(st),
     ...(mode === 'refill'
       ? {
           excludeIds: [...st.recommendedIds],
@@ -465,6 +481,9 @@ const plan = async(mode: 'initial' | 'refill'): Promise<void> => {
     const stateAtPlan = state.value
     // 引擎分流：平台相似为默认路径（零 LLM）；旧 AI/本地引擎仅显式设置进入，不因平台失败降级触发
     const engineMode = recommendEngineMode()
+    // 音频特征只服务旧 AI/本地引擎；平台模式不启动每秒 Analyser 采集。
+    if (engineMode === 'platform') stopFeatureCollection()
+    else startFeatureCollection()
     let result: ExploreResult | PlatformExploreResult
     if (engineMode === 'platform') {
       const options = buildPlatformOptions(mode)
@@ -476,12 +495,14 @@ const plan = async(mode: 'initial' | 'refill'): Promise<void> => {
       result = await exploreOnce({ ...options, enqueue: false, isCancelled: () => e !== epoch })
     }
     if (e !== epoch) return
+    result = filterQueuedResult(result, tempPlayList)
+    if (result.engine === 'platform' && result.meta.state === 'ok' && !result.candidates.length) result.meta.state = 'empty-after-filter'
     applyResult(result, { radius: stateAtPlan.radius, instruction: stateAtPlan.instruction })
     refillRetry = 0
     refillState.value = 'idle'
     // 先登记归属，再入队；addTempPlayList 在播放器为空时可能同步开始播放；空批次不入队。
     const enqueueItems = result.candidates.flatMap(c => c.musicInfo ? [{
-      listId: LIST_IDS.PLAY_LATER, musicInfo: c.musicInfo, isTop: false,
+      listId: LIST_IDS.PLAY_LATER, musicInfo: c.musicInfo, isTop: false, recommendationSessionId: e,
     }] : [])
     if (enqueueItems.length) addTempPlayList(enqueueItems)
   } catch (err) {
@@ -509,7 +530,6 @@ const plan = async(mode: 'initial' | 'refill'): Promise<void> => {
           // 同一 run 连续计划最终失败达到上限 → 收台（D13/AC9）：清本 run 队列残留后结束会话；
           // 电台仍为开时 endSession 保留切歌订阅，下一首切歌会以新歌重新开台
           console.warn('[session] 同一 run 连续计划最终失败达到上限，收台')
-          removeTempByIds(st.recommendedIds)
           endSession()
         }
       }
@@ -561,8 +581,8 @@ const resetPlanContext = (): void => {
 
 /**
  * 开新台公共序列（startRadioSession / startSession 共用）：
- * 清计划上下文 → 按设置默认半径建全新 run → 建立切歌订阅 → 启动特征采集
- * （随会话生命周期让特征桶在会话播放中持续积累，此前仅 dev 钩子可达、生产路径从未启动）→ 记 run 开始指标；
+ * 清计划上下文 → 按设置默认半径建全新 run → 建立切歌订阅 → 记 run 开始指标；
+ * 旧 AI/本地引擎在实际计划前按需启动特征采集，平台引擎不启动无消费者的 Analyser 采样；
  * 指标批次登记序号随新 run 归零（重锚属同一 run、复用 reanchorSession 路径，不经由本函数）。
  * 两入口各自的差异留在外层：startRadioSession 防抖发起首计划（切歌吸抖），startSession 幂等后直接 await 首计划。
  */
@@ -571,7 +591,6 @@ const openSession = (anchor: SessionAnchor): void => {
   metricsBatchSeq = 0
   state.value = createSession(anchor, { radius: appSetting['recommend.radius'] })
   subscribeMusicToggled()
-  startFeatureCollection()
   emitMetrics({ type: 'runStarted', ts: Date.now() })
 }
 
@@ -586,14 +605,12 @@ const startRadioSession = (play: NonNullable<ReturnType<typeof currentMusic>>): 
  * 收旧台 → 以新歌开新台（run 级字段与连续失败计数沿用，见 session-core.reanchorSession）→ 防抖发起首计划。
  * 复用 startSession 的“清残留→endSession→开新会话→plan(initial)”结构。
  */
-const reanchorRadioSession = (prev: SessionState, clearIds: string[], play: NonNullable<ReturnType<typeof currentMusic>>): void => {
-  removeTempByIds(clearIds)
+const reanchorRadioSession = (prev: SessionState, play: NonNullable<ReturnType<typeof currentMusic>>): void => {
   // keepRunAlive：重锚是同一 run 内的“收旧台开新台”（D7 run 级字段沿用），run 指标不结算、不新计
   endSession({ keepRunAlive: true })
   resetPlanContext()
   state.value = reanchorSession(prev, toAnchor(play))
   subscribeMusicToggled()
-  startFeatureCollection()
   scheduleRadioPlan()
 }
 
@@ -620,7 +637,7 @@ const handleMusicToggled = (): void => {
       if (play) startRadioSession(play)
       return
     case 'reanchor':
-      if (st && play) reanchorRadioSession(st, decision.clearIds, play)
+      if (st && play) reanchorRadioSession(st, play)
       return
     case 'on-path': {
       if (!st || !play) return
@@ -678,7 +695,6 @@ export const startSession = async(): Promise<void> => {
     // 锚点一致 → 幂等返回（用户点了播放栏按钮只是跳转页面，不打断当前会话）
     if (st.anchor.id != null && String(play.id) === String(st.anchor.id)) return
     // 锚点变化 → 重开会话：清掉旧会话的推荐残留（保留用户手动入队的歌曲）
-    removeTempByIds(st.recommendedIds)
     endSession()
   }
   openSession(toAnchor(play))
@@ -768,7 +784,7 @@ export const setInstruction = (instruction: string): void => {
 export const playPathItem = (id: string | null): void => {
   const st = state.value
   if (!st || id == null) return
-  const queued = tempPlayList.find(item => item?.musicInfo?.id === id)
+  const queued = tempPlayList.find(item => item.recommendationSessionId === epoch && item.musicInfo.id === id)
   if (queued?.musicInfo) {
     const queueIndex = tempPlayList.indexOf(queued)
     removeTempPlayList(queueIndex)
@@ -793,6 +809,7 @@ export const playPathItem = (id: string | null): void => {
  * 其余收台路径（显式关闭/连续失败收台/锚点变更重开前的清场）一律结算 runEnded。
  */
 export const endSession = (options?: { keepRunAlive?: boolean }): void => {
+  clearRecommendedQueue()
   if (!options?.keepRunAlive) emitMetrics({ type: 'runEnded', ts: Date.now() })
   if (refillTimer) {
     clearTimeout(refillTimer)
@@ -844,7 +861,6 @@ export const initRecommendRadio = (): void => {
       }
     } else if (state.value) {
       // 收台含清场（TT-1：播放栏开关「关 = 清场收台」）：本 run 的队列残留须随会话一并撤除，口径与连续失败收台一致
-      removeTempByIds(state.value.recommendedIds)
       endSession()
     } else {
       unsubMusicToggled?.()

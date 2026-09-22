@@ -100,6 +100,10 @@ export default {
           const targetList = allLists.find(l => l.id == list.id)
           if (targetList) {
             targetList.list = filterMusicList(list.list).map(m => fixNewMusicInfoQuality(m))
+            // 旧备份可能没有元数据字段；字段存在时才覆盖，避免旧格式导入抹掉本地信息。
+            if (Object.prototype.hasOwnProperty.call(list, 'cover')) targetList.cover = list.cover ?? null
+            if (Object.prototype.hasOwnProperty.call(list, 'desc')) targetList.desc = list.desc ?? null
+            if (Object.prototype.hasOwnProperty.call(list, 'author')) targetList.author = list.author ?? null
           } else {
             allLists.push({
               name: list.name,

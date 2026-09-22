@@ -13,7 +13,6 @@ import {
   handleGetOnlinePicUrl,
   getCachedLyricInfo,
 } from './utils'
-import { writebackToggleMusicInfo } from './toggleWriteback'
 
 /* export const setMusicUrl = ({ musicInfo, type, url }: {
   musicInfo: LX.Music.MusicInfo
@@ -39,11 +38,13 @@ export const setPic = (datas: {
  */
 
 
-export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSource = true, onToggleSource = () => {}, onToggleApiSource }: {
+export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSource = true, onResolvedMusicInfo, onToggleSource = () => {}, onToggleApiSource }: {
   musicInfo: LX.Music.MusicInfoOnline
   quality?: LX.Quality
   isRefresh: boolean
   allowToggleSource?: boolean
+  /** 只报告实际取流条目；播放状态和歌单写回由播放器提交。 */
+  onResolvedMusicInfo?: (musicInfo: LX.Music.MusicInfoOnline) => void
   onToggleSource?: (musicInfo?: LX.Music.MusicInfoOnline) => void
   onToggleApiSource?: () => void
 }): Promise<string> => {
@@ -55,13 +56,15 @@ export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSou
   // }
   const targetQuality = quality ?? getPlayQuality(appSetting['player.playQuality'], musicInfo)
   const cachedUrl = await getStoreMusicUrl(musicInfo, targetQuality)
-  if (cachedUrl && !isRefresh) return cachedUrl
+  if (cachedUrl && !isRefresh) {
+    onResolvedMusicInfo?.(musicInfo)
+    return cachedUrl
+  }
 
   return handleGetOnlineMusicUrl({ musicInfo, quality, onToggleSource, onToggleApiSource, isRefresh, allowToggleSource }).then(({ url, quality: targetQuality, musicInfo: targetMusicInfo, isFromCache }) => {
     if (targetMusicInfo.id != musicInfo.id && !isFromCache) void saveMusicUrl(targetMusicInfo, targetQuality, url)
     void saveMusicUrl(musicInfo, targetQuality, url)
-    // 自动换源成功：仅当取流对象是当前播放歌曲时写回「我的列表」（ADR-0003）
-    if (targetMusicInfo.id != musicInfo.id) void writebackToggleMusicInfo(musicInfo, targetMusicInfo).catch(err => { console.log(err) })
+    onResolvedMusicInfo?.(targetMusicInfo)
     return url
   })
 }

@@ -14,6 +14,7 @@ import {
 } from '@renderer/store/player/action'
 import { appSetting } from '@renderer/store/setting'
 import { getMusicUrl, getPicPath, getLyricInfo } from '../music/index'
+import { writebackToggleMusicInfo } from '../music/toggleWriteback'
 import { filterList } from './utils'
 import { requestMsg } from '@renderer/utils/message'
 import { getRandom } from '@renderer/utils/index'
@@ -63,7 +64,7 @@ const diffCurrentMusicInfo = (curMusicInfo: LX.Music.MusicInfo | LX.Download.Lis
   return gettingUrlId != createGettingUrlId(curMusicInfo) || curMusicInfo.id != playMusicInfo.musicInfo?.id || isPlay.value
 }
 
-const getMusicPlayUrl = async(musicInfo: LX.Music.MusicInfo | LX.Download.ListItem, isRefresh = false, isRetryed = false): Promise<string | null> => {
+const getMusicPlayUrl = async(musicInfo: LX.Music.MusicInfo | LX.Download.ListItem, isRefresh = false, isRetryed = false, onResolvedMusicInfo?: (info: LX.Music.MusicInfoOnline) => void): Promise<string | null> => {
   // this.musicInfo.url = await getMusicPlayUrl(targetSong, type)
   setAllStatus(window.i18n.t('player__getting_url'))
   if (appSetting['player.autoSkipOnError']) addLoadTimeout()
@@ -75,10 +76,12 @@ const getMusicPlayUrl = async(musicInfo: LX.Music.MusicInfo | LX.Download.ListIt
     musicInfo: toggleMusicInfo,
     isRefresh,
     allowToggleSource: false,
+    onResolvedMusicInfo,
   }) : Promise.reject(new Error('not found'))).catch(async() => {
     return getMusicUrl({
       musicInfo,
       isRefresh,
+      onResolvedMusicInfo,
       onToggleSource(mInfo) {
         if (diffCurrentMusicInfo(musicInfo)) return
         setAllStatus(window.i18n.t('toggle_source_try'))
@@ -100,7 +103,7 @@ const getMusicPlayUrl = async(musicInfo: LX.Music.MusicInfo | LX.Download.ListIt
       err.message == requestMsg.cancelRequest) return null
 
     // 429 不再等待重试同源：音源轮换已在取流链内完成（ADR-0003）
-    if (!isRetryed) return getMusicPlayUrl(musicInfo, isRefresh, true)
+    if (!isRetryed) return getMusicPlayUrl(musicInfo, isRefresh, true, onResolvedMusicInfo)
 
     throw err
   })
@@ -110,20 +113,31 @@ export const setMusicUrl = (musicInfo: LX.Music.MusicInfo | LX.Download.ListItem
   // if (appSetting['player.autoSkipOnError']) addLoadTimeout()
   if (!diffCurrentMusicInfo(musicInfo)) return
   gettingUrlId = createGettingUrlId(musicInfo)
-  void getMusicPlayUrl(musicInfo, isRefresh).then((url) => {
+  let resolvedMusicInfo: LX.Music.MusicInfoOnline | undefined
+  void getMusicPlayUrl(musicInfo, isRefresh, false, info => { resolvedMusicInfo = info }).then((url) => {
     if (!url) return
     setResource(url)
+    // 先接受本次 URL，再写回身份；否则取流的过期检查会误丢弃刚换源成功的结果。
+    if (resolvedMusicInfo && 'source' in musicInfo && musicInfo.source !== 'local') {
+      void writebackToggleMusicInfo(musicInfo, resolvedMusicInfo).catch(err => { console.log(err) })
+    }
   }).catch((err: any) => {
     console.log(err)
     setAllStatus(err.message)
     window.app_event.error()
     if (appSetting['player.autoSkipOnError']) addDelayNextTimeout()
   }).finally(() => {
-    if (musicInfo === playMusicInfo.musicInfo) {
+    if (isCurrentMusic(musicInfo)) {
       gettingUrlId = ''
       clearLoadTimeout()
     }
   })
+}
+
+const isCurrentMusic = (info: LX.Music.MusicInfo | LX.Download.ListItem): boolean => {
+  const currentId = playMusicInfo.musicInfo?.id
+  const original = 'progress' in info ? info.metadata.musicInfo : info
+  return currentId != null && (info.id === currentId || original.meta.toggleMusicInfo?.id === currentId)
 }
 
 // 恢复上次播放的状态
@@ -139,13 +153,13 @@ const handleRestorePlay = async(restorePlayInfo: LX.Player.SavedPlayInfo) => {
 
 
   void getPicPath({ musicInfo, listId: playMusicInfo.listId }).then((url: string) => {
-    if (musicInfo.id != playMusicInfo.musicInfo?.id || url == _musicInfo.pic) return
+    if (!isCurrentMusic(musicInfo) || url == _musicInfo.pic) return
     setMusicInfo({ pic: url })
     window.app_event.picUpdated()
   }).catch(_ => _)
 
   void getLyricInfo({ musicInfo }).then((lyricInfo) => {
-    if (musicInfo.id != playMusicInfo.musicInfo?.id) return
+    if (!isCurrentMusic(musicInfo)) return
     setMusicInfo({
       lrc: lyricInfo.lyric,
       tlrc: lyricInfo.tlyric,
@@ -156,7 +170,7 @@ const handleRestorePlay = async(restorePlayInfo: LX.Player.SavedPlayInfo) => {
     window.app_event.lyricUpdated()
   }).catch((err) => {
     console.log(err)
-    if (musicInfo.id != playMusicInfo.musicInfo?.id) return
+    if (!isCurrentMusic(musicInfo)) return
     setAllStatus(window.i18n.t('lyric__load_error'))
   })
 
@@ -190,13 +204,13 @@ const handlePlay = () => {
   setMusicUrl(musicInfo)
 
   void getPicPath({ musicInfo, listId: playMusicInfo.listId }).then((url: string) => {
-    if (musicInfo.id != playMusicInfo.musicInfo?.id || url == _musicInfo.pic) return
+    if (!isCurrentMusic(musicInfo) || url == _musicInfo.pic) return
     setMusicInfo({ pic: url })
     window.app_event.picUpdated()
   }).catch(_ => _)
 
   void getLyricInfo({ musicInfo }).then((lyricInfo) => {
-    if (musicInfo.id != playMusicInfo.musicInfo?.id) return
+    if (!isCurrentMusic(musicInfo)) return
     setMusicInfo({
       lrc: lyricInfo.lyric,
       tlrc: lyricInfo.tlyric,
@@ -207,7 +221,7 @@ const handlePlay = () => {
     window.app_event.lyricUpdated()
   }).catch((err) => {
     console.log(err)
-    if (musicInfo.id != playMusicInfo.musicInfo?.id) return
+    if (!isCurrentMusic(musicInfo)) return
     setAllStatus(window.i18n.t('lyric__load_error'))
   })
 }

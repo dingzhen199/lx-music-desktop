@@ -52,9 +52,11 @@ const handleUpdateProxy = (keys: Array<keyof LX.AppSetting>) => {
 }
 
 const winEvent = (apiId: string, browserWindow: Electron.BrowserWindow) => {
+  const webContentsId = browserWindow.webContents.id
   browserWindow.on('closed', () => {
     if (windows.get(apiId) === browserWindow) windows.delete(apiId)
-    webContentsApiMap.delete(browserWindow.webContents.id)
+    webContentsApiMap.delete(webContentsId)
+    if (!windows.size) global.lx.event_app.off('updated_config', handleUpdateProxy)
   })
 }
 
@@ -119,18 +121,19 @@ export const createWindow = async(userApi: LX.UserApi.UserApiInfo) => {
     return { action: 'deny' }
   })
 
+  if (!windows.size) global.lx.event_app.on('updated_config', handleUpdateProxy)
   windows.set(userApi.id, browserWindow)
   webContentsApiMap.set(browserWindow.webContents.id, userApi.id)
   winEvent(userApi.id, browserWindow)
 
   // console.log(html.replace('</body>', `<script>${userApi.script}</script></body>`))
   // const randomNum = Math.random().toString().substring(2, 10)
-  await browserWindow.loadURL('data:text/html;charset=UTF-8,' + encodeURIComponent(html))
-
-  browserWindow.on('ready-to-show', async() => {
-    global.lx.event_app.on('updated_config', handleUpdateProxy)
-    sendEventToApi(userApi.id, USER_API_RENDERER_EVENT_NAME.initEnv, { ...userApi, script: await getScript(userApi.id), proxy: getProxy() })
+  browserWindow.once('ready-to-show', async() => {
+    const script = await getScript(userApi.id)
+    if (windows.get(userApi.id) !== browserWindow) return
+    sendEventToApi(userApi.id, USER_API_RENDERER_EVENT_NAME.initEnv, { ...userApi, script, proxy: getProxy() })
   })
+  await browserWindow.loadURL('data:text/html;charset=UTF-8,' + encodeURIComponent(html))
 
   // global.modules.userApiWindow.loadFile(join(dir, 'renderer/user-api.html'))
   // global.modules.userApiWindow.webContents.openDevTools()

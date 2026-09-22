@@ -8,8 +8,9 @@ export default {
   page: 0,
   allPage: 1,
   successCode: 0,
-  musicSearch(str, page, limit, retryNum = 0) {
+  musicSearch(str, page, limit, retryNum = 0, cancelState = { cancelled: false, request: null }) {
     if (retryNum > 5) return Promise.reject(new Error('搜索失败'))
+    if (cancelState.cancelled) return Promise.reject(new Error('request cancelled'))
     const searchRequest = signRequest({
       comm: {
         _channelid: '0',
@@ -41,14 +42,21 @@ export default {
         },
       },
     })
-    return searchRequest.then(({ body }) => {
+    cancelState.request = searchRequest
+    const promise = searchRequest.then(({ body }) => {
+      if (cancelState.cancelled) throw new Error('request cancelled')
       // console.log(body)
       const req = body?.['music.search.SearchCgiService'] ?? body?.req
       if (!req || body.code != this.successCode || req.code != this.successCode) {
-        return this.musicSearch(str, page, limit, ++retryNum)
+        return this.musicSearch(str, page, limit, ++retryNum, cancelState)
       }
       return req.data
     })
+    promise.cancel = () => {
+      cancelState.cancelled = true
+      cancelState.request?.cancel?.()
+    }
+    return promise
   },
   /**
    * PC 客户端版 searchid：32 位大写十六进制 GUID + 5 位补零随机数 = 37 字符。
@@ -129,7 +137,9 @@ export default {
   },
   search(str, page = 1, limit) {
     if (limit == null) limit = this.limit
-    return this.musicSearch(str, page, limit).then(({ body, meta }) => {
+    const cancelState = { cancelled: false, request: null }
+    const request = this.musicSearch(str, page, limit, 0, cancelState)
+    const promise = request.then(({ body, meta }) => {
       let list = this.handleResult(body.song.list)
 
       this.total = meta.sum
@@ -144,5 +154,10 @@ export default {
         source: 'tx',
       })
     })
+    promise.cancel = () => {
+      cancelState.cancelled = true
+      cancelState.request?.cancel?.()
+    }
+    return promise
   },
 }

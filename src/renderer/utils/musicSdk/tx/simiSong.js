@@ -78,7 +78,7 @@ export default {
    * @param {string|number} songId tx 数字歌曲 id（搜索结果的 songId 字段，非 songmid）
    * @returns {Promise<{ source: 'tx', list: Array }>} 归一化为与搜索结果同构的列表（可直接 toNewMusicInfo）
    */
-  async getSimiSong(songId) {
+  getSimiSong(songId) {
     const requestObj = httpFetch('https://u.y.qq.com/cgi-bin/musicu.fcg', {
       method: 'post',
       headers: {
@@ -103,11 +103,14 @@ export default {
         },
       },
     })
-    const { body, statusCode } = await requestObj.promise
-    if (statusCode != 200) throw new Error('获取相似歌曲失败')
-    const sub = body?.simsongs
-    // P0 实测：成功 code=0；参数类型错误 code=2001；空列表与错误可区分
-    if (!sub || sub.code !== 0) throw new Error(`获取相似歌曲失败(${sub?.code ?? 'unknown'})`)
-    return { source: 'tx', list: this.handleResult(sub.data?.songInfoList ?? []) }
+    const promise = requestObj.promise.then(({ body, statusCode }) => {
+      if (statusCode != 200) throw new Error('获取相似歌曲失败')
+      const sub = body?.simsongs
+      // P0 实测：成功 code=0；参数类型错误 code=2001；空列表与错误可区分
+      if (!sub || sub.code !== 0) throw new Error(`获取相似歌曲失败(${sub?.code ?? 'unknown'})`)
+      return { source: 'tx', list: this.handleResult(sub.data?.songInfoList ?? []) }
+    })
+    promise.cancel = () => requestObj.cancelHttp?.()
+    return promise
   },
 }

@@ -43,6 +43,19 @@ beforeEach(() => {
 })
 
 describe('平台相似推荐引擎', () => {
+  it('相似请求期间手动入队的同曲不重复插入', async() => {
+    let resolveRecall!: (value: PlatformRecallResult) => void
+    mocks.recall.mockImplementationOnce(async() => new Promise(resolve => { resolveRecall = resolve }))
+    const pending = explorePlatformOnce({ anchor })
+    await vi.waitFor(() => { expect(mocks.recall).toHaveBeenCalledOnce() })
+    mocks.queue.push({ musicInfo: musicInfo('tx_1', '花海', '周杰伦') })
+    resolveRecall(recallResult())
+    const result = await pending
+    expect(result.candidates).toEqual([])
+    expect(result.meta.state).toBe('empty-after-filter')
+    expect(mocks.addQueue).not.toHaveBeenCalled()
+  })
+
   it('成功结果追加队尾入队，不打断当前播放（isTop=false）', async() => {
     const result = await explorePlatformOnce({ anchor, appendMode: 'bottom' })
     expect(result.engine).toBe('platform')

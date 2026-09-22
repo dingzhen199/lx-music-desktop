@@ -91,14 +91,55 @@ export interface PlatformRecallResult {
 /** 模块级缓存单例（TTL/容量由 recommendationConfig 集中配置）。 */
 const similarCache = new SimilarCandidateCache()
 
-/** 有限超时包装：超时按请求失败处理（不无限等待）。 */
-const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
+/** 可取消 Promise：平台 SDK 适配器将底层 httpFetch.cancelHttp 暴露到此边界。 */
+type CancellablePromise<T> = Promise<T> & {
+  cancel?: () => void
+  cancelHttp?: () => void
+}
+
+const cancelRequest = <T>(request: CancellablePromise<T>): void => {
+  try {
+    if (request.cancel) request.cancel()
+    else request.cancelHttp?.()
+  } catch {}
+}
+
+/** 有限超时包装：超时和会话取消都终止底层请求，不留下后台重试。 */
+const withTimeout = async <T>(
+  request: CancellablePromise<T>,
+  timeoutMs: number,
+  isCancelled?: () => boolean,
+): Promise<T> => {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => { reject(new Error(`请求超时(${timeoutMs}ms)`)) }, timeoutMs)
-    promise.then(
-      value => { clearTimeout(timer); resolve(value) },
-      err => { clearTimeout(timer); reject(err) },
-    )
+    let settled = false
+    let cancelTimer: ReturnType<typeof setInterval> | null = null
+    const timer = setTimeout(() => {
+      finishReject(new Error(`请求超时(${timeoutMs}ms)`), true)
+    }, timeoutMs)
+    const cleanup = () => {
+      clearTimeout(timer)
+      if (cancelTimer != null) clearInterval(cancelTimer)
+    }
+    const finishResolve = (value: T) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      resolve(value)
+    }
+    const finishReject = (err: unknown, abort = false) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (abort) cancelRequest(request)
+      reject(err)
+    }
+    if (isCancelled) {
+      cancelTimer = setInterval(() => {
+        if (isCancelled()) finishReject(new Error('推荐计划已取消'), true)
+      }, 50)
+      if (isCancelled()) finishReject(new Error('推荐计划已取消'), true)
+    }
+    request.then(finishResolve, finishReject)
   })
 }
 
@@ -109,8 +150,8 @@ const rawHasId = (raw: Record<string, any>): boolean => {
 
 /** musicSdk 的最小类型投影（JS 模块推断类型不稳定，统一经此收窄为 any 边界）。 */
 type SimilarSdk = Record<string, {
-  simiSong?: { getSimiSong: (songId: string) => Promise<any> }
-  musicSearch?: { search: (str: string, page: number, limit: number) => Promise<any> }
+  simiSong?: { getSimiSong: (songId: string) => CancellablePromise<any> }
+  musicSearch?: { search: (str: string, page: number, limit: number) => CancellablePromise<any> }
 }>
 const similarSdk = musicSdk as unknown as SimilarSdk
 
@@ -136,6 +177,7 @@ const locateSeed = async(
     result = await withTimeout(
       similarSdk[provider].musicSearch!.search(keyword, 1, 30),
       SIMILAR_SEED_SEARCH_TIMEOUT_MS,
+      isCancelled,
     )
   } catch (err) {
     return { seedId: null, error: `seed-search: ${(err as Error).message}` }
@@ -176,6 +218,7 @@ const callSimilar = async(
       const result = await withTimeout(
         similarSdk[provider].simiSong!.getSimiSong(seedId),
         SIMILAR_REQUEST_TIMEOUT_MS,
+        isCancelled,
       )
       if (isCancelled?.()) return { status: 'cancelled', items: [] }
       const list: any[] = Array.isArray(result?.list) ? result.list : []
@@ -245,12 +288,8 @@ const filterFused = (
   const killed: Partial<Record<FilterRule, number>> = {}
   const count = (rule: FilterRule) => { killed[rule] = (killed[rule] ?? 0) + 1 }
 
-  const diversified = applyArtistDiversity(items)
-  // 多样性被跳过的条目计入 diversity 淘汰（被多样性跳过的条目不再走后续规则，避免重复计数）
-  const diversitySkipped = items.length - diversified.length
-
   const kept: FusedCandidate[] = []
-  for (const item of diversified) {
+  for (const item of items) {
     const ref: SongRef = { artist: item.artist, title: item.title }
     const id = String(item.musicInfo.id ?? '')
     if (id && excludeIds.has(id)) { count('session'); continue }
@@ -260,8 +299,11 @@ const filterFused = (
     if (sameSongIn(options.dislikedTracks, ref)) { count('disliked'); continue }
     kept.push(item)
   }
+  // 已消费/收藏等条目不能占用本批配额；续补才能继续消费缓存中的后续候选。
+  const diversified = applyArtistDiversity(kept)
+  const diversitySkipped = kept.length - diversified.length
   if (diversitySkipped > 0) killed.diversity = diversitySkipped
-  return { kept, killed }
+  return { kept: diversified, killed }
 }
 
 /**
@@ -336,7 +378,6 @@ export const recallPlatformSimilar = async(
   const errors = providerResults.filter(p => p.status === 'error')
   const noMatch = providerResults.filter(p => p.status === 'no-match')
   const definitive = providerResults.filter(p => p.status === 'success' || p.status === 'empty')
-  const locatedAny = providerResults.some(p => p.seedId != null)
 
   if (items.length) {
     return { state: 'ok', items, providers: projectProviders(providerResults), error: errors.length ? errors.map(e => `${e.provider}: ${e.error}`).join('；') : null }
@@ -361,8 +402,8 @@ export const recallPlatformSimilar = async(
   }
 
   // 无任何平台成功取数：全部失败（可重试）/ 全部无匹配 / 种子已定位但平台空结果
-  if (noMatch.length && !errors.length) {
-    return { state: 'no-match', items: [], providers: projectProviders(providerResults), error: null }
+  if (definitive.length) {
+    return { state: 'empty', items: [], providers: projectProviders(providerResults), error: null }
   }
   if (errors.length && !definitive.length) {
     return {
@@ -372,7 +413,7 @@ export const recallPlatformSimilar = async(
       error: errors.map(e => `${e.provider}: ${e.error ?? '请求失败'}`).join('；') || '全部平台请求失败',
     }
   }
-  if (!locatedAny && noMatch.length) {
+  if (noMatch.length) {
     return { state: 'no-match', items: [], providers: projectProviders(providerResults), error: null }
   }
   return { state: 'empty', items: [], providers: projectProviders(providerResults), error: null }

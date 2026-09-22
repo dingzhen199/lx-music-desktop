@@ -1,8 +1,8 @@
 /**
  * 从“打开歌单”弹窗的输入内容中识别平台歌单链接的音源与歌单 id
  *
- * 各音源可识别的链接形式与 musicSdk/<source>/songList.js 中的解析正则保持一致，
- * 避免自动识别出 SDK 无法打开的链接形式
+ * 各音源可识别的链接形式与 musicSdk/<source>/songList.js 的入口能力保持一致，
+ * 避免自动识别出 SDK 无法打开的链接形式。
  */
 
 export interface ParsedSongListUrl {
@@ -29,9 +29,11 @@ const txRegExps = [
   /\/playlist\/(\d+)/i,
   /id=(\d+)/i,
 ]
-// 与 src/renderer/utils/musicSdk/kg/songList.js 的 regExps.listDetailLink 保持一致，
-// 且仅当链接包含 special/single/ 时才使用（kg getListDetail 中该正则只在此路径下使用，见 kg/songList.js:684-687）
+// 与 src/renderer/utils/musicSdk/kg/songList.js 的 special/single 解析保持一致。
 const kgRegExp = /^.+\/(\d+)\.html(?:\?.*|&.*$|#.*$|$)/i
+// 酷狗用户歌单还支持 gcid/chain/zlist/songlist 等链接，SDK 会在 getUserListDetail
+// 内部继续解析或跟随跳转；这些场景必须保留原 URL，而不能强行提取不存在的纯数字 id。
+const kgUserListRegExp = /(?:gcid_|(?:global_collection_id|chain)=|zlist\.html|\/songlist\/)/i
 // 与 src/renderer/utils/musicSdk/kw/songList.js 的 regExps.listDetailLink 保持一致
 const kwRegExp = /^.+\/playlist(?:_detail)?\/(\d+)(?:\?.*|&.*$|#.*$|$)/i
 // 与 src/renderer/utils/musicSdk/mg/songList.js 的 regExps.listDetailLink 及 getListDetail 中的链接解析保持一致
@@ -41,7 +43,10 @@ const mgRegExp = /^.+\/playlist\/(\d+)(?:\?.*|&.*$|#.*$|$)/i
 const parseIdBySource: Record<LX.OnlineSource, (url: string) => string | null> = {
   wy: url => wyRegExps[0].exec(url)?.[1] ?? wyRegExps[1].exec(url)?.[1] ?? null,
   tx: url => txRegExps[0].exec(url)?.[1] ?? txRegExps[1].exec(url)?.[1] ?? null,
-  kg: url => /special\/single\//i.test(url) ? kgRegExp.exec(url)?.[1] ?? null : null,
+  kg: url => {
+    if (/special\/single\//i.test(url)) return kgRegExp.exec(url)?.[1] ?? null
+    return kgUserListRegExp.test(url) ? url : null
+  },
   kw: url => kwRegExp.exec(url)?.[1] ?? null,
   mg: url => {
     if (/\/playlist[/?]/i.test(url)) {
@@ -55,7 +60,7 @@ const parseIdBySource: Record<LX.OnlineSource, (url: string) => string | null> =
 /**
  * 解析歌单链接
  * @param input 用户输入内容，可能为歌单链接或分享文字附带链接
- * @returns 解析成功返回音源与纯数字歌单 id，否则返回 null
+ * @returns 解析成功返回音源与 SDK 可接受的歌单 id/URL，否则返回 null
  */
 export const parseSongListUrl = (input: string): ParsedSongListUrl | null => {
   const value = input.trim()

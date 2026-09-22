@@ -1,6 +1,8 @@
 import { allMusicList, defaultList, loveList, removeListMusics, userLists } from '@renderer/store/list/listManage'
 import { addListMusics, updateListMusicsPosition } from '@renderer/store/list/action'
 import { playMusicInfo } from '@renderer/store/player/state'
+import { replacePlayMusicInfo } from '@renderer/store/player/action'
+import { isProviderChanged } from './sourceRotation'
 
 const isUserList = (listId: string | null): boolean => {
   if (!listId) return false
@@ -10,12 +12,12 @@ const isUserList = (listId: string | null): boolean => {
 /**
  * 自动换源成功后把提供方变更写回「我的列表」（ADR-0003）。
  *
- * 数据变更序列与手动「歌曲换源」一致（移除原曲 → 追加同曲变体 → 归位到原位置），
- * 但不调用 playListById、不改写 playMusicInfo.musicInfo——歌曲已在播，播放状态保持原对象，
- * 不触发 musicToggled（对探索电台而言换源是同曲，不跟歌重锚）。
+ * 先插入并归位新条目，再迁移当前播放身份，最后移除旧条目。
+ * 每个列表变更事件都能找到当前歌曲；不重置音频、进度或触发 musicToggled。
  * 排行榜、搜索结果、稍后播放等临时上下文不写回。
  */
 export const writebackToggleMusicInfo = async(originalInfo: LX.Music.MusicInfoOnline, toggleInfo: LX.Music.MusicInfoOnline) => {
+  if (!isProviderChanged(originalInfo.source, toggleInfo.source)) return
   const listId = playMusicInfo.listId
   if (playMusicInfo.isTempPlay || !listId || !isUserList(listId)) return
   // 取流期间已切歌则放弃写回
@@ -28,14 +30,12 @@ export const writebackToggleMusicInfo = async(originalInfo: LX.Music.MusicInfoOn
   if (oldIdx < 0) return
   const id = toggleInfo.id
   const index = list.findIndex(m => m.id == id)
-  const removeIds = [oldId]
-  if (index > -1) removeIds.push(id)
-
-  await removeListMusics({ listId, ids: removeIds })
   await addListMusics(listId, [toggleInfo], 'bottom')
   if (index != -1 && index < oldIdx) oldIdx--
   await updateListMusicsPosition({ listId, ids: [id], position: oldIdx })
 
-  // 复用既有 toggleMusicInfo 机制：原对象再次播放时优先走已验证的同曲变体
+  // 迟到的封面/歌词仍属于同曲；若已切歌，replacePlayMusicInfo 不修改新播放。
   originalInfo.meta.toggleMusicInfo = toggleInfo
+  replacePlayMusicInfo(listId, originalInfo, toggleInfo)
+  await removeListMusics({ listId, ids: [oldId] })
 }

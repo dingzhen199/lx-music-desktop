@@ -197,6 +197,17 @@ export const setPlayMusicInfo = (listId: string | null, musicInfo: LX.Download.L
   }
 }
 
+/** 同曲换源只替换列表中的播放身份，保留音频、进度、歌词和电台锚点。 */
+export const replacePlayMusicInfo = (listId: string, original: LX.Music.MusicInfoOnline, replacement: LX.Music.MusicInfoOnline) => {
+  if (playMusicInfo.listId !== listId || playMusicInfo.musicInfo !== original) return
+  playMusicInfo.musicInfo = toRaw(replacement)
+  for (const item of playedList) {
+    if (item.listId === listId && item.musicInfo.id === original.id) item.musicInfo = toRaw(replacement)
+  }
+  setMusicInfo({ id: replacement.id, name: replacement.name, singer: replacement.singer, album: replacement.meta.albumName })
+  updatePlayIndex()
+}
+
 /**
  * 将歌曲添加到已播放列表
  * @param playMusicInfo playMusicInfo对象
@@ -233,8 +244,8 @@ export const addTempPlayList = (list: LX.Player.TempPlayListItem[]) => {
     }
     return true
   })
-  if (topList.length) arrUnshift(tempPlayList, topList.map(({ musicInfo, listId }) => ({ musicInfo, listId, isTempPlay: true })))
-  if (bottomList.length) arrPush(tempPlayList, bottomList.map(({ musicInfo, listId }) => ({ musicInfo, listId, isTempPlay: true })))
+  if (topList.length) arrUnshift(tempPlayList, topList.map(({ musicInfo, listId, recommendationSessionId }) => ({ musicInfo, listId, isTempPlay: true, recommendationSessionId })))
+  if (bottomList.length) arrPush(tempPlayList, bottomList.map(({ musicInfo, listId, recommendationSessionId }) => ({ musicInfo, listId, isTempPlay: true, recommendationSessionId })))
 
   if (!playMusicInfo.musicInfo) void playNext()
 }

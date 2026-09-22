@@ -26,7 +26,9 @@ export default {
       total: page == 1,
       limit,
     })
-    return searchRequest.promise.then(({ body }) => body)
+    const promise = searchRequest.promise.then(({ body }) => body)
+    promise.cancel = () => searchRequest.cancelHttp?.()
+    return promise
   },
   getSinger(singers) {
     let arr = []
@@ -91,16 +93,20 @@ export default {
       }
     })
   },
-  search(str, page = 1, limit, retryNum = 0) {
+  search(str, page = 1, limit, retryNum = 0, cancelState = { cancelled: false, request: null }) {
     if (++retryNum > 3) return Promise.reject(new Error('try max num'))
+    if (cancelState.cancelled) return Promise.reject(new Error('request cancelled'))
     if (limit == null) limit = this.limit
-    return this.musicSearch(str, page, limit).then(result => {
+    const request = this.musicSearch(str, page, limit)
+    cancelState.request = request
+    const promise = request.then(result => {
+      if (cancelState.cancelled) throw new Error('request cancelled')
       // console.log(result)
-      if (!result || result.code !== 200) return this.search(str, page, limit, retryNum)
+      if (!result || result.code !== 200) return this.search(str, page, limit, retryNum, cancelState)
       let list = this.handleResult(result.data.resources || [])
       // console.log(list)
 
-      if (list == null) return this.search(str, page, limit, retryNum)
+      if (list == null) return this.search(str, page, limit, retryNum, cancelState)
 
       this.total = result.data.totalCount || 0
       this.page = page
@@ -115,5 +121,10 @@ export default {
       }
       // return result.data
     })
+    promise.cancel = () => {
+      cancelState.cancelled = true
+      cancelState.request?.cancel?.()
+    }
+    return promise
   },
 }

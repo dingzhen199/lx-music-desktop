@@ -20,6 +20,7 @@ import { recallPlatformSimilar } from './platformRecall'
 import type { PlatformRecallAnchor, PlatformRecallState } from './platformRecall'
 import type { FusedCandidate, SimilarProviderId } from './similarFusion'
 import type { SongRef } from './sameSong'
+import { filterQueuedResult } from './queue'
 
 /** 平台推荐引擎选项。 */
 export interface PlatformExploreOptions {
@@ -138,15 +139,7 @@ export const explorePlatformOnce = async(options: PlatformExploreOptions): Promi
     throw new Error(recall.error ?? '全部平台请求失败')
   }
 
-  if (options.enqueue !== false && recall.items.length) {
-    addTempPlayList(recall.items.map(item => ({
-      listId: LIST_IDS.PLAY_LATER,
-      musicInfo: item.musicInfo,
-      isTop: options.appendMode !== 'bottom',
-    })))
-  }
-
-  return {
+  const result = filterQueuedResult<PlatformExploreResult>({
     engine: 'platform',
     anchor: { artist: anchor.artist, title: anchor.title, album: anchor.album ?? '' },
     candidates: recall.items.map(toView),
@@ -155,5 +148,14 @@ export const explorePlatformOnce = async(options: PlatformExploreOptions): Promi
       providers: recall.providers,
       error: recall.error,
     },
+  }, tempPlayList)
+  if (recall.items.length && !result.candidates.length) result.meta.state = 'empty-after-filter'
+  if (options.enqueue !== false && result.candidates.length) {
+    addTempPlayList(result.candidates.flatMap(item => item.musicInfo ? [{
+      listId: LIST_IDS.PLAY_LATER,
+      musicInfo: item.musicInfo,
+      isTop: options.appendMode !== 'bottom',
+    }] : []))
   }
+  return result
 }

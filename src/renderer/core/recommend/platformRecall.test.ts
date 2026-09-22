@@ -70,6 +70,34 @@ beforeEach(() => {
 })
 
 describe('平台相似召回：种子定位', () => {
+  it('已消费的同艺人前两首不占用下一批配额', async() => {
+    const cache = freshCache()
+    mocks.wySimi.mockResolvedValue(simiResult(['a', 'b', 'c', 'd'].map(name => simiRow(name, 'Other Artist'))))
+    const first = await recallPlatformSimilar(anchor, { cache })
+    const second = await recallPlatformSimilar(anchor, { cache, excludeIds: first.items.map(item => item.musicInfo.id) })
+    expect(first.items.map(item => item.title)).toEqual(['a', 'b'])
+    expect(second.items.map(item => item.title)).toEqual(['c', 'd'])
+    expect(mocks.wySimi).toHaveBeenCalledTimes(1)
+    const exhausted = await recallPlatformSimilar(anchor, { cache, excludeIds: [...first.items, ...second.items].map(item => item.musicInfo.id) })
+    expect(exhausted.state).toBe('exhausted')
+  })
+
+  it('收藏的同艺人前两首不阻断后续候选', async() => {
+    mocks.wySimi.mockResolvedValue(simiResult(['a', 'b', 'c'].map(name => simiRow(name, 'Other Artist'))))
+    const result = await call(anchor, { lovedTracks: ['a', 'b'].map(title => ({ artist: 'Other Artist', title })) })
+    expect(result.items.map(item => item.title)).toEqual(['c'])
+  })
+
+  it('已匹配平台的空结果优先于另一平台无匹配', async() => {
+    mocks.txSearch.mockResolvedValue(searchResult([]))
+    const result = await call(anchor)
+    expect(result.state).toBe('empty')
+    expect(result.providers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ provider: 'wy', status: 'empty', seedId: '186016' }),
+      expect.objectContaining({ provider: 'tx', status: 'no-match' }),
+    ]))
+  })
+
   it('原生平台标识直接使用，不发搜索请求', async() => {
     mocks.wySimi.mockResolvedValue(simiResult([simiRow('花海', '周杰伦')]))
     const result = await call(anchor)
@@ -186,6 +214,28 @@ describe('平台相似召回：单源失败隔离与状态区分', () => {
     const result = await recallPlatformSimilar(anchor, { isCancelled: () => cancelled, cache })
     expect(result.state).toBe('cancelled')
     expect(cache.size).toBe(0)
+  })
+
+  it('在途请求取消时调用适配器 cancel，不等待平台超时', async() => {
+    let cancelled = false
+    let cancelCalled = false
+    mocks.wySimi.mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/promise-function-async
+      () => {
+        const request = new Promise(() => {}) as Promise<unknown> & { cancel?: () => void }
+        request.cancel = () => {
+          cancelCalled = true
+          cancelled = true
+        }
+        return request
+      },
+    )
+    const pending = recallPlatformSimilar(anchor, { isCancelled: () => cancelled, cache: freshCache() })
+    await new Promise(resolve => setTimeout(resolve, 80))
+    cancelled = true
+    const result = await pending
+    expect(result.state).toBe('cancelled')
+    expect(cancelCalled).toBe(true)
   })
 })
 
