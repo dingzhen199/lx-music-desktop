@@ -38,11 +38,12 @@ export const setPic = (datas: {
  */
 
 
-export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSource = true, onResolvedMusicInfo, onToggleSource = () => {}, onToggleApiSource }: {
+export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSource = true, onResolvedMusicInfo, onToggleSource = () => {}, onToggleApiSource, alternativeMusicInfos }: {
   musicInfo: LX.Music.MusicInfoOnline
   quality?: LX.Quality
   isRefresh: boolean
   allowToggleSource?: boolean
+  alternativeMusicInfos?: LX.Music.MusicInfoOnline[]
   /** 只报告实际取流条目；播放状态和歌单写回由播放器提交。 */
   onResolvedMusicInfo?: (musicInfo: LX.Music.MusicInfoOnline) => void
   onToggleSource?: (musicInfo?: LX.Music.MusicInfoOnline) => void
@@ -61,7 +62,7 @@ export const getMusicUrl = async({ musicInfo, quality, isRefresh, allowToggleSou
     return cachedUrl
   }
 
-  return handleGetOnlineMusicUrl({ musicInfo, quality, onToggleSource, onToggleApiSource, isRefresh, allowToggleSource }).then(({ url, quality: targetQuality, musicInfo: targetMusicInfo, isFromCache }) => {
+  return handleGetOnlineMusicUrl({ musicInfo, quality, onToggleSource, onToggleApiSource, isRefresh, allowToggleSource, alternativeMusicInfos }).then(({ url, quality: targetQuality, musicInfo: targetMusicInfo, isFromCache }) => {
     if (targetMusicInfo.id != musicInfo.id && !isFromCache) void saveMusicUrl(targetMusicInfo, targetQuality, url)
     void saveMusicUrl(musicInfo, targetQuality, url)
     onResolvedMusicInfo?.(targetMusicInfo)

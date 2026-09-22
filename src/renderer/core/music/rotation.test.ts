@@ -4,7 +4,7 @@ import { handleGetOnlineMusicUrl, getOnlineOtherSourceMusicUrl } from './utils'
 const mocks = vi.hoisted(() => ({ primary: vi.fn(), backup: vi.fn() }))
 vi.mock('@renderer/store', () => ({
   qualityList: { value: {} },
-  userApi: { apis: { backup: { wy: {} } }, qualityLists: { backup: { wy: ['128k'] } } },
+  userApi: { apis: { backup: { wy: { getMusicUrl: mocks.backup } } }, qualityLists: { backup: { wy: ['128k'] } } },
 }))
 vi.mock('@renderer/store/setting', () => ({
   appSetting: { 'common.apiSource': 'primary', 'common.apiSourceBackups': ['backup'], 'player.playQuality': '128k' },

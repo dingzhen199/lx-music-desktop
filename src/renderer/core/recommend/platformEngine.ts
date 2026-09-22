@@ -54,6 +54,7 @@ export interface PlatformItemView {
   reason: string
   journeyRole: string
   musicInfo?: LX.Music.MusicInfoOnline
+  alternativeMusicInfos?: LX.Music.MusicInfoOnline[]
   /** 各来源证据（含排名与备用音源条目）。 */
   sources: Array<{ provider: SimilarProviderId, rank: number, musicInfo: LX.Music.MusicInfoOnline }>
 }
@@ -100,6 +101,9 @@ const toView = (item: FusedCandidate): PlatformItemView => {
     // 平台模式无弧线角色语义，占位 open（视图在平台模式隐藏角色徽章）
     journeyRole: 'open',
     musicInfo: item.musicInfo as LX.Music.MusicInfoOnline,
+    alternativeMusicInfos: item.sources
+      .filter(s => s.musicInfo.id !== item.musicInfo.id)
+      .map(s => s.musicInfo as LX.Music.MusicInfoOnline),
     sources: item.sources.map(s => ({ provider: s.provider, rank: s.rank, musicInfo: s.musicInfo as LX.Music.MusicInfoOnline })),
   }
 }
@@ -154,6 +158,7 @@ export const explorePlatformOnce = async(options: PlatformExploreOptions): Promi
     addTempPlayList(result.candidates.flatMap(item => item.musicInfo ? [{
       listId: LIST_IDS.PLAY_LATER,
       musicInfo: item.musicInfo,
+      alternativeMusicInfos: item.alternativeMusicInfos,
       isTop: options.appendMode !== 'bottom',
     }] : []))
   }

@@ -131,12 +131,15 @@ export const versionInfo = window.lxData.versionInfo = reactive<{
   status: 'checking',
   downloadProgress: null,
 })
+type UserApiHandler = (...args: any[]) => { promise: Promise<any>, canceleFn: () => void }
+type UserApiHandlers = Partial<Record<'getMusicUrl' | 'getLyric' | 'getPic', UserApiHandler>>
+
 export const userApi = reactive<{
   list: LX.UserApi.UserApiInfo[]
   status: boolean
   message?: string
   /** 各音源（apiId）的接口处理器；主源与备源同时在场 */
-  apis: Record<string, Partial<LX.UserApi.UserApiSources>>
+  apis: Record<string, Partial<Record<LX.Source, UserApiHandlers>>>
   /** 各音源（apiId）的可用音质表 */
   qualityLists: Record<string, LX.QualityList>
 }>({

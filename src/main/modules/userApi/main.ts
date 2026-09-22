@@ -86,6 +86,7 @@ export const createWindow = async(userApi: LX.UserApi.UserApiInfo) => {
     hasShadow: false,
     show: false,
     webPreferences: {
+      partition: `user-api-${userApi.id}`,
       contextIsolation: true,
       // worldSafeExecuteJavaScript: true,
       nodeIntegration: false,
@@ -110,12 +111,9 @@ export const createWindow = async(userApi: LX.UserApi.UserApiInfo) => {
       event.preventDefault()
     })
   }
-  browserWindow.webContents.session.setPermissionRequestHandler((webContents, permission, resolve) => {
-    if (webContents === browserWindow?.webContents) {
-      resolve(false)
-      return
-    }
-    resolve(true)
+  browserWindow.webContents.session.setPermissionCheckHandler(() => false)
+  browserWindow.webContents.session.setPermissionRequestHandler((_webContents, _permission, resolve) => {
+    resolve(false)
   })
   browserWindow.webContents.setWindowOpenHandler(() => {
     return { action: 'deny' }

@@ -159,6 +159,13 @@ const nav = async(window, hash) => {
   await window.waitForTimeout(900)
 }
 
+async function closeSourceModal(window) {
+  const heading = window.getByRole('heading', { name: '自定义源管理', exact: true })
+  if (!(await heading.isVisible())) return
+  await heading.locator('..').locator('..').locator('header > button').click()
+  await heading.waitFor({ state: 'hidden' })
+}
+
 const getPlayStatus = (window) => window.evaluate(() => {
   const els = Array.from(document.querySelectorAll('#player div, #player span'))
   return els.map(d => d.textContent?.trim() ?? '').find(t => t && t.length < 60 && /失败|断开|停止|加载|切换/.test(t)) ?? ''
@@ -211,7 +218,17 @@ const isTolerable = (e) => TOLERATED_ERRORS.some(re => re.test(e))
         try { return (w.webContents.getURL() ?? '').startsWith('data:') } catch { return false }
       }).length)
     if (dataWindows != 2) throw new Error(`data: 隐藏窗口数 ${dataWindows}，期望 2（主源+备源）`)
-    return '主源+备源各一个隐藏窗口'
+    await app.evaluate(async({ BrowserWindow, session }, { primaryId, backupId }) => {
+      const primary = session.fromPartition(`user-api-${primaryId}`)
+      const backup = session.fromPartition(`user-api-${backupId}`)
+      const windows = BrowserWindow.getAllWindows()
+      if (primary === backup || primary === session.defaultSession || backup === session.defaultSession ||
+        !windows.some(w => w.webContents.session === primary) || !windows.some(w => w.webContents.session === backup)) {
+        throw new Error('音源 Session 未隔离')
+      }
+      await primary.cookies.set({ url: 'https://e2e.invalid', name: 'isolation', value: 'keep' })
+    }, { primaryId: PRIMARY_ID, backupId: BACKUP_ID })
+    return '主源与备源窗口及 Session 均独立'
   })
 
   // ================= U2 源管理弹窗 =================
@@ -247,13 +264,36 @@ const isTolerable = (e) => TOLERATED_ERRORS.some(re => re.test(e))
     await window.waitForTimeout(1200)
     const cfgOff = JSON.parse(fs.readFileSync(path.join(profileDir, 'LxDatas', 'config_v2.json'), 'utf8'))
     if ((cfgOff.setting['common.apiSourceBackups'] ?? []).length != 0) throw new Error('取消勾选后设置未清空')
+    const cookieCount = await app.evaluate(async({ session }, id) =>
+      (await session.fromPartition(`user-api-${id}`).cookies.get({ name: 'isolation' })).length, PRIMARY_ID)
+    if (cookieCount !== 1) throw new Error('卸载备源清除了主源 Cookie')
     await checkbox.click()
     await window.waitForTimeout(1200)
     const cfgOn = JSON.parse(fs.readFileSync(path.join(profileDir, 'LxDatas', 'config_v2.json'), 'utf8'))
     if ((cfgOn.setting['common.apiSourceBackups'] ?? [])[0] != BACKUP_ID) throw new Error('恢复勾选后设置未还原')
-    await window.keyboard.press('Escape')
-    await window.waitForTimeout(500)
+    await closeSourceModal(window)
     return '主源标记/备源勾选/取消恢复均正常'
+  })
+
+  await run(window, 'U2b-备源升为主源不重复显示且配置主备互斥', async() => {
+    try {
+      await window.evaluate(id => window.lxData.updateSetting({ 'common.apiSource': id }), BACKUP_ID)
+      await window.waitForFunction(id =>
+        window.lxData.appSetting['common.apiSource'] === id && !window.lxData.appSetting['common.apiSourceBackups'].includes(id), BACKUP_ID)
+      await window.locator('button').filter({ hasText: '自定义源管理' }).first().click()
+      await window.waitForTimeout(800)
+      const count = await window.evaluate(name =>
+        Array.from(document.querySelectorAll('li')).filter(li => li.querySelector('h3')?.textContent.includes(name)).length, BACKUP_NAME)
+      if (count !== 1) throw new Error(`新主源出现 ${count} 行`)
+      const config = JSON.parse(fs.readFileSync(path.join(profileDir, 'LxDatas', 'config_v2.json'), 'utf8'))
+      if (config.setting['common.apiSourceBackups'].includes(BACKUP_ID)) throw new Error('落盘配置仍有主备重合')
+    } finally {
+      await closeSourceModal(window)
+      await window.evaluate(({ primaryId, backupId }) =>
+        window.lxData.updateSetting({ 'common.apiSource': primaryId, 'common.apiSourceBackups': [backupId] }),
+      { primaryId: PRIMARY_ID, backupId: BACKUP_ID })
+      await window.waitForTimeout(1200)
+    }
   })
 
   // ================= U3+U4 播放回退全链路 + 写回 =================

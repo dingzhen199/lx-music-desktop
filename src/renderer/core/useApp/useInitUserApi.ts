@@ -163,7 +163,7 @@ export default () => {
         console.log('backup api init failed:', apiInfo.name, message)
       }
     }
-    if (isPrimary && !window.lx.apiInitPromise[1]) window.lx.apiInitPromise[2](status)
+    if (isPrimary) window.lx.apiInitPromise[2](status)
   })
 
   const rUserApiShowUpdateAlert = onShowUserApiUpdateAlert(({ params: { name, log, updateUrl } }) => {

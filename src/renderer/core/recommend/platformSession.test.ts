@@ -205,3 +205,20 @@ describe('旧引擎值的兼容加载（显式选择才进入）', () => {
     expect(mocks.explore).not.toHaveBeenCalled()
   })
 })
+
+
+it('备用平台信息随推荐入队、路径跳播和已播曲重播保留', async() => {
+  const item = fusedItem('wy_1', 'Song', 'Artist')
+  const alternative = { ...item.musicInfo, id: 'tx_1', source: 'tx' }
+  item.sources.push({ provider: 'tx' as any, rank: 1, musicInfo: alternative })
+  mocks.platformRecall.mockResolvedValue(recallOk([item]))
+  await session.startSession()
+  expect(mocks.queue[0].alternativeMusicInfos).toEqual([alternative])
+  session.playPathItem('wy_1')
+  expect(mocks.playNow).toHaveBeenLastCalledWith(item.musicInfo, null, [alternative])
+  mocks.player.musicInfo = item.musicInfo
+  ;(window.app_event as unknown as EventEmitter).emit('musicToggled')
+  expect(session.sessionView.value.path[0].state).toBe('played')
+  session.playPathItem('wy_1')
+  expect(mocks.playNow).toHaveBeenLastCalledWith(item.musicInfo, null, [alternative])
+})

@@ -81,6 +81,7 @@ const getMusicPlayUrl = async(musicInfo: LX.Music.MusicInfo | LX.Download.ListIt
     return getMusicUrl({
       musicInfo,
       isRefresh,
+      alternativeMusicInfos: musicInfo === playMusicInfo.musicInfo ? playMusicInfo.alternativeMusicInfos : undefined,
       onResolvedMusicInfo,
       onToggleSource(mInfo) {
         if (diffCurrentMusicInfo(musicInfo)) return
@@ -360,7 +361,7 @@ export const getNextPlayMusicInfo = async(): Promise<LX.Player.PlayMusicInfo | n
 
 const handlePlayNext = (playMusicInfo: LX.Player.PlayMusicInfo) => {
   // pause()
-  setPlayMusicInfo(playMusicInfo.listId, playMusicInfo.musicInfo, playMusicInfo.isTempPlay)
+  setPlayMusicInfo(playMusicInfo.listId, playMusicInfo.musicInfo, playMusicInfo.isTempPlay, playMusicInfo.alternativeMusicInfos)
   handlePlay()
 }
 
@@ -372,8 +373,8 @@ const handlePlayNext = (playMusicInfo: LX.Player.PlayMusicInfo) => {
  * 仅 setPlayMusicInfo + play() 不会更换音频资源（play() 只会在音频为空时取 URL，
  * 否则只是续播上一个加载的音频），用户会看着新标题继续听旧歌。
  */
-export const playMusicInfoNow = (musicInfo: LX.Music.MusicInfo | LX.Download.ListItem, listId: string | null = null) => {
-  setPlayMusicInfo(listId, musicInfo, true)
+export const playMusicInfoNow = (musicInfo: LX.Music.MusicInfo | LX.Download.ListItem, listId: string | null = null, alternativeMusicInfos?: LX.Music.MusicInfoOnline[]) => {
+  setPlayMusicInfo(listId, musicInfo, true, alternativeMusicInfos)
   handlePlay()
 }
 /**

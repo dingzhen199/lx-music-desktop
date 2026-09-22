@@ -431,6 +431,7 @@ const applyResult = (result: ExploreResult | PlatformExploreResult, batch: Pick<
       state: 'planned',
       batch: pathBatch,
       musicInfo: c.musicInfo,
+      alternativeMusicInfos: c.alternativeMusicInfos,
     })
   }
   state.value = next
@@ -502,7 +503,11 @@ const plan = async(mode: 'initial' | 'refill'): Promise<void> => {
     refillState.value = 'idle'
     // 先登记归属，再入队；addTempPlayList 在播放器为空时可能同步开始播放；空批次不入队。
     const enqueueItems = result.candidates.flatMap(c => c.musicInfo ? [{
-      listId: LIST_IDS.PLAY_LATER, musicInfo: c.musicInfo, isTop: false, recommendationSessionId: e,
+      listId: LIST_IDS.PLAY_LATER,
+      musicInfo: c.musicInfo,
+      isTop: false,
+      recommendationSessionId: e,
+      alternativeMusicInfos: c.alternativeMusicInfos,
     }] : [])
     if (enqueueItems.length) addTempPlayList(enqueueItems)
   } catch (err) {
@@ -655,6 +660,7 @@ const handleMusicToggled = (): void => {
         batch: existing?.batch,
         // 已播条目可能已离开稍后播放队列，保留 musicInfo 供路径点击重新入队播放
         musicInfo: existing?.musicInfo,
+        alternativeMusicInfos: existing?.alternativeMusicInfos,
       })
       if (!appSetting['recommend.autoRefill']) return
       if (computeRefillNeed(outstandingRecommendedIds(st))) scheduleRefill()
@@ -788,12 +794,12 @@ export const playPathItem = (id: string | null): void => {
   if (queued?.musicInfo) {
     const queueIndex = tempPlayList.indexOf(queued)
     removeTempPlayList(queueIndex)
-    playMusicInfoNow(queued.musicInfo)
+    playMusicInfoNow(queued.musicInfo, null, queued.alternativeMusicInfos)
     return
   }
   const pathItem = st.path.find(p => p.id === id)
   if (pathItem?.musicInfo) {
-    playMusicInfoNow(pathItem.musicInfo)
+    playMusicInfoNow(pathItem.musicInfo, null, pathItem.alternativeMusicInfos)
     return
   }
   console.warn('[session] 路径条目缺少可播放的音乐信息', id)

@@ -28,6 +28,7 @@ export interface SimilarCacheEntry {
 /** 相似候选缓存（LRU + TTL；Map 迭代序即热度序：尾端最新）。 */
 export class SimilarCandidateCache {
   private readonly store = new Map<string, SimilarCacheEntry>()
+  private readonly seeds = new Map<string, { seedId: string, fetchedAt: number }>()
   constructor(
     private readonly maxEntries: number = SIMILAR_CACHE_MAX_ENTRIES,
     private readonly ttlMs: number = SIMILAR_CACHE_TTL_MS,
@@ -37,6 +38,28 @@ export class SimilarCandidateCache {
   /** 缓存键：平台 + 种子原生 id（不含认证信息；账号上下文由调用方拼入 key）。 */
   static key(provider: SimilarProviderId, seedId: string, accountContext = ''): string {
     return `${provider}:${String(seedId)}:${accountContext}`
+  }
+
+  /** 已确认的跨平台种子；独立按同一 TTL/容量限制，不缓存失败或无匹配。 */
+  getSeed(provider: SimilarProviderId, anchorKey: string, accountContext = ''): string | null {
+    const key = SimilarCandidateCache.key(provider, anchorKey, accountContext)
+    const entry = this.seeds.get(key)
+    if (!entry) return null
+    this.seeds.delete(key)
+    if (this.now() - entry.fetchedAt > this.ttlMs) return null
+    this.seeds.set(key, entry)
+    return entry.seedId
+  }
+
+  setSeed(provider: SimilarProviderId, anchorKey: string, seedId: string, accountContext = ''): void {
+    const key = SimilarCandidateCache.key(provider, anchorKey, accountContext)
+    this.seeds.delete(key)
+    this.seeds.set(key, { seedId, fetchedAt: this.now() })
+    while (this.seeds.size > this.maxEntries) {
+      const oldest = this.seeds.keys().next().value
+      if (oldest == null) break
+      this.seeds.delete(oldest)
+    }
   }
 
   /** 读取：未命中/已过期返回 null（过期条目顺手淘汰）；命中刷新 LRU 热度。 */
@@ -73,6 +96,7 @@ export class SimilarCandidateCache {
 
   clear(): void {
     this.store.clear()
+    this.seeds.clear()
   }
 
   get size(): number {

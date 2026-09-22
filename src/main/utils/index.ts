@@ -3,6 +3,7 @@ import migrateSetting from '@common/utils/migrateSetting'
 import getStore from '@main/utils/store'
 import { STORE_NAMES, URL_SCHEME_RXP } from '@common/constants'
 import defaultSetting from '@common/defaultSetting'
+import { normalizeApiSourceBackups } from '@common/userApi'
 import defaultHotKey from '@common/defaultHotKey'
 import { migrateDataJson, migrateHotKey, migrateUserApi, parseDataFile } from './migrate'
 import { nativeTheme, powerSaveBlocker } from 'electron'
@@ -101,6 +102,13 @@ export const mergeSetting = (originSetting: LX.AppSetting, targetSetting?: Parti
     }
   }
 
+  const backupKey = 'common.apiSourceBackups'
+  const backups = normalizeApiSourceBackups(originSettingCopy['common.apiSource'], originSettingCopy[backupKey])
+  if (JSON.stringify(backups) !== JSON.stringify(originSettingCopy[backupKey])) {
+    originSettingCopy[backupKey] = backups
+    updatedSetting[backupKey] = backups
+    if (!updatedSettingKeys.includes(backupKey)) updatedSettingKeys.push(backupKey)
+  }
   return {
     setting: originSettingCopy,
     updatedSettingKeys,

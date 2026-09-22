@@ -112,6 +112,7 @@ export interface ExploreItemView {
   distance: number | null
   /** 可插入队列播放的完整音乐信息（与 addTempPlayList 同源；探索路径点击跳播用）。 */
   musicInfo?: LX.Music.MusicInfoOnline
+  alternativeMusicInfos?: LX.Music.MusicInfoOnline[]
 }
 
 /** exploreOnce 结果视图。 */

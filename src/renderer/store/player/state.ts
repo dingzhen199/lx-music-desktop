@@ -53,6 +53,7 @@ export const playMusicInfo = shallowReactive<{
    * 是否属于 “稍后播放”
    */
   isTempPlay: boolean
+  alternativeMusicInfos?: LX.Music.MusicInfoOnline[]
 }>({
   listId: null,
   musicInfo: null,

@@ -173,12 +173,13 @@ const setPlayerMusicInfo = (musicInfo: LX.Music.MusicInfo | LX.Download.ListItem
  * @param musicInfo 歌曲信息
  * @param isTempPlay 是否临时播放
  */
-export const setPlayMusicInfo = (listId: string | null, musicInfo: LX.Download.ListItem | LX.Music.MusicInfo | null, isTempPlay: boolean = false) => {
+export const setPlayMusicInfo = (listId: string | null, musicInfo: LX.Download.ListItem | LX.Music.MusicInfo | null, isTempPlay: boolean = false, alternativeMusicInfos?: LX.Music.MusicInfoOnline[]) => {
   musicInfo = toRaw(musicInfo)
 
   playMusicInfo.listId = listId
   playMusicInfo.musicInfo = musicInfo
   playMusicInfo.isTempPlay = isTempPlay
+  playMusicInfo.alternativeMusicInfos = alternativeMusicInfos?.map(info => toRaw(info))
 
   setPlayerMusicInfo(musicInfo)
 
@@ -244,8 +245,8 @@ export const addTempPlayList = (list: LX.Player.TempPlayListItem[]) => {
     }
     return true
   })
-  if (topList.length) arrUnshift(tempPlayList, topList.map(({ musicInfo, listId, recommendationSessionId }) => ({ musicInfo, listId, isTempPlay: true, recommendationSessionId })))
-  if (bottomList.length) arrPush(tempPlayList, bottomList.map(({ musicInfo, listId, recommendationSessionId }) => ({ musicInfo, listId, isTempPlay: true, recommendationSessionId })))
+  if (topList.length) arrUnshift(tempPlayList, topList.map(({ isTop, ...item }) => ({ ...item, isTempPlay: true })))
+  if (bottomList.length) arrPush(tempPlayList, bottomList.map(({ isTop, ...item }) => ({ ...item, isTempPlay: true })))
 
   if (!playMusicInfo.musicInfo) void playNext()
 }

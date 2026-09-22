@@ -42,6 +42,7 @@ import { appSetting, updateSetting } from '@renderer/store/setting'
 import { computed, onMounted, ref, useCssModule } from '@common/utils/vueTools'
 import { dialog } from '@renderer/plugins/Dialog'
 import useDrag from '@renderer/utils/compositions/useDrag'
+import { normalizeApiSourceBackups } from '@common/userApi'
 
 import UserApiOnlineImportModal from './UserApiOnlineImportModal.vue'
 
@@ -64,7 +65,7 @@ export default {
     // 展示顺序即轮换顺序：主源 → 备源（按用户排序）→ 未启用
     const apiList = computed(() => {
       const primaryId = appSetting['common.apiSource']
-      const backupIds = appSetting['common.apiSourceBackups']
+      const backupIds = normalizeApiSourceBackups(primaryId, appSetting['common.apiSourceBackups'])
       const list = userApi.list
       const primary = list.filter(api => api.id == primaryId)
       const backups = backupIds.map(id => list.find(api => api.id == id)).filter(Boolean)
@@ -72,7 +73,7 @@ export default {
       return [...primary, ...backups, ...rest]
     })
 
-    const isBackup = (id) => appSetting['common.apiSourceBackups'].includes(id)
+    const isBackup = (id) => id !== appSetting['common.apiSource'] && appSetting['common.apiSourceBackups'].includes(id)
 
     const handleToggleBackup = (api, enable) => {
       const ids = [...appSetting['common.apiSourceBackups']]

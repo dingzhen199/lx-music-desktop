@@ -6,7 +6,7 @@ import { addHistoryWord } from '@renderer/store/search/action'
 // import { useI18n } from '@renderer/plugins/i18n'
 // import { } from '@renderer/store/search/state'
 import { search as searchMusic, listInfos, type ListInfo } from '@renderer/store/search/music'
-import { assertApiSupport } from '@renderer/store/utils'
+import { assertPlaybackSupport } from '@renderer/core/music/sourceCapabilities'
 
 export type SearchSource = LX.OnlineSource | 'all'
 
@@ -38,7 +38,7 @@ export default () => {
   const handlePlayList = async(index: number) => {
     let targetSong = listInfo.value.list[index]
 
-    if (!assertApiSupport(targetSong.source)) return
+    if (!assertPlaybackSupport(targetSong.source)) return
 
     const defaultListMusics = await getListMusics(LIST_IDS.DEFAULT)
 

@@ -301,3 +301,35 @@ describe('平台相似召回：跨源融合与缓存', () => {
     expect(result.state).toBe('ok')
   })
 })
+
+it(' 已缓存相似结果时，种子搜索故障不应丢失尚未消费的候选', async() => {
+  const cache = freshCache()
+  const localAnchor = { ...anchor, source: 'local', seedIds: null }
+  mocks.wySimi.mockResolvedValue(simiResult([simiRow('第一首', 'ArtistA'), simiRow('第二首', 'ArtistB')]))
+  const first = await recallPlatformSimilar(localAnchor, { cache, maxItems: 1 })
+  expect(first.items).toHaveLength(1)
+  expect(cache.size).toBe(2)
+  mocks.wySearch.mockRejectedValue(new Error('search offline'))
+  mocks.txSearch.mockRejectedValue(new Error('search offline'))
+  const next = await recallPlatformSimilar(localAnchor, { cache, maxItems: 1, excludeIds: first.items.map(item => item.musicInfo.id) })
+  expect(next.items.map(item => item.title)).toEqual(['第二首'])
+})
+
+
+it('缓存用尽不重搜，匹配证据变化或 TTL 到期后才重新定位', async() => {
+  let now = 0
+  const cache = new SimilarCandidateCache(64, 1000, () => now)
+  const localAnchor = { ...anchor, source: 'local', seedIds: null }
+  mocks.wySimi.mockResolvedValue(simiResult([simiRow('Song', 'Artist')]))
+  const first = await recallPlatformSimilar(localAnchor, { cache })
+  const excludeIds = first.items.map(item => item.musicInfo.id)
+  const exhausted = await recallPlatformSimilar(localAnchor, { cache, excludeIds })
+  expect(exhausted.state).toBe('exhausted')
+  expect(mocks.wySearch).toHaveBeenCalledTimes(1)
+  expect(mocks.txSearch).toHaveBeenCalledTimes(1)
+  now = 1001
+  await recallPlatformSimilar(localAnchor, { cache, excludeIds })
+  expect(mocks.wySearch).toHaveBeenCalledTimes(2)
+  await recallPlatformSimilar({ ...localAnchor, title: '另一录音' }, { cache })
+  expect(mocks.wySearch).toHaveBeenCalledTimes(3)
+})

@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type * as ApiModule from './main'
 
-const mocks = vi.hoisted(() => ({ windows: [] as any[], send: vi.fn() }))
+const mocks = vi.hoisted(() => ({ windows: [] as any[], sessions: new Map<string, any>(), send: vi.fn() }))
 vi.mock('fs', () => ({ default: { promises: { readFile: async() => '<html></html>' } } }))
 vi.mock('@common/mainIpc', () => ({ mainSend: mocks.send }))
 vi.mock('@main/utils', () => ({ openDevTools: vi.fn() }))
@@ -16,16 +16,24 @@ vi.mock('electron', async() => {
         id: mocks.windows.length + 1,
         on: vi.fn(),
         setWindowOpenHandler: vi.fn(),
-        session: {
-          setPermissionRequestHandler: vi.fn(),
-          clearAuthCache: async() => {},
-          clearStorageData: async() => {},
-          clearCache: async() => {},
-        },
+        session: null as any,
       }
 
-      constructor() {
+      constructor(options: Electron.BrowserWindowConstructorOptions) {
         super()
+        const key = options.webPreferences?.partition ?? 'default'
+        if (!mocks.sessions.has(key)) {
+          const cookies = new Map<string, string>()
+          mocks.sessions.set(key, {
+            cookies,
+            setPermissionCheckHandler: vi.fn(),
+            setPermissionRequestHandler: vi.fn(),
+            clearAuthCache: vi.fn(async() => {}),
+            clearStorageData: vi.fn(async() => { cookies.clear() }),
+            clearCache: vi.fn(async() => {}),
+          })
+        }
+        this.contents.session = mocks.sessions.get(key)
         mocks.windows.push(this)
       }
 
@@ -52,6 +60,7 @@ beforeEach(async() => {
   vi.resetModules()
   vi.clearAllMocks()
   mocks.windows.splice(0)
+  mocks.sessions.clear()
   events = new EventEmitter()
   vi.stubGlobal('lx', { appSetting: {}, event_app: events })
   vi.stubGlobal('envParams', { cmdParams: {} })
@@ -87,4 +96,24 @@ it('反复装载卸载音源不累积代理监听器，初始化不遗漏早到�
     expect(events.listenerCount('updated_config')).toBe(0)
   }
   expect(mocks.send).toHaveBeenCalledTimes(3)
+})
+
+
+it('各音源隔离 Session，权限检查和申请均拒绝，卸载不清除其他源存储', async() => {
+  await api.createWindow(info('primary'))
+  await api.createWindow(info('backup'))
+  const primary = mocks.windows[0].webContents.session
+  const backup = mocks.windows[1].webContents.session
+  expect(primary).not.toBe(backup)
+  expect(mocks.sessions.has('default')).toBe(false)
+  backup.cookies.set('auth', 'kept')
+  for (const session of [primary, backup]) {
+    expect(session.setPermissionCheckHandler.mock.calls[0][0]()).toBe(false)
+    const resolve = vi.fn()
+    session.setPermissionRequestHandler.mock.calls[0][0](mocks.windows[0].webContents, 'notifications', resolve)
+    expect(resolve).toHaveBeenCalledWith(false)
+  }
+  await api.closeWindow('primary')
+  expect(backup.cookies.get('auth')).toBe('kept')
+  expect(backup.clearStorageData).not.toHaveBeenCalled()
 })

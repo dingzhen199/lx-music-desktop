@@ -162,7 +162,7 @@ describe('会话与播放队列竞态', () => {
     await session.startSession()
     mocks.queue.push({ musicInfo: { id: 'manual' } })
     session.playPathItem('song')
-    expect(mocks.playNow).toHaveBeenCalledWith(expect.objectContaining({ id: 'song' }))
+    expect(mocks.playNow).toHaveBeenCalledWith(expect.objectContaining({ id: 'song' }), null, undefined)
     expect(mocks.queue.map(item => item.musicInfo.id)).toEqual(['manual'])
     session.playPathItem('song')
     expect(mocks.playNow).toHaveBeenCalledTimes(2)

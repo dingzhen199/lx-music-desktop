@@ -44,13 +44,14 @@ vi.mock('@renderer/core/dislikeList', () => ({ addDislikeInfo: vi.fn() }))
 beforeEach(() => {
   vi.clearAllMocks()
   tempPlayList.splice(0)
+  playMusicInfo.alternativeMusicInfos = undefined
   vi.stubGlobal('window', {
     lx: { isPlayedStop: false },
     i18n: { t: (value: string) => value },
     app_event: { pause: vi.fn(), picUpdated: vi.fn(), lyricUpdated: vi.fn(), error: vi.fn() },
   })
-  vi.mocked(setPlayMusicInfo).mockImplementation((listId, musicInfo, isTempPlay = false) => {
-    Object.assign(playMusicInfo, { listId, musicInfo, isTempPlay })
+  vi.mocked(setPlayMusicInfo).mockImplementation((listId, musicInfo, isTempPlay = false, alternativeMusicInfos) => {
+    Object.assign(playMusicInfo, { listId, musicInfo, isTempPlay, alternativeMusicInfos })
   })
   vi.mocked(removeTempPlayList).mockImplementation(index => { tempPlayList.splice(index, 1) })
 })
@@ -63,7 +64,7 @@ it('路径即播标记为临时播放并重新启动播放，保留原列表位�
   const song: LX.Music.MusicInfo = { id: 'recommended', name: 'Recommended', singer: 'Artist', source: 'wy', interval: null, meta: { songId: 'recommended', albumName: '', qualitys: [], _qualitys: {} } }
   tempPlayList.push({ listId: 'later', musicInfo: song, isTempPlay: true })
   playMusicInfoNow(song)
-  expect(setPlayMusicInfo).toHaveBeenCalledWith(null, song, true)
+  expect(setPlayMusicInfo).toHaveBeenCalledWith(null, song, true, undefined)
   expect(setStop).toHaveBeenCalledOnce()
   expect(clearTempPlayeList).not.toHaveBeenCalled()
   expect(addPlayedList).not.toHaveBeenCalled()
@@ -75,7 +76,7 @@ it('下一曲消费 FIFO 队首一次，继续保持临时播放身份', async()
   tempPlayList.push({ listId: 'later', musicInfo: song, isTempPlay: true })
   await playNext()
   expect(removeTempPlayList).toHaveBeenCalledExactlyOnceWith(0)
-  expect(setPlayMusicInfo).toHaveBeenCalledWith('later', song, true)
+  expect(setPlayMusicInfo).toHaveBeenCalledWith('later', song, true, undefined)
   expect(tempPlayList).toHaveLength(0)
 })
 
@@ -116,4 +117,18 @@ it('取流期间已切歌则不写回迟到结果', async() => {
   for (let i = 0; i < 10; i++) await Promise.resolve()
   expect(setResource).not.toHaveBeenCalled()
   expect(writebackToggleMusicInfo).not.toHaveBeenCalled()
+})
+
+
+it('FIFO 与路径播放把备用条目交给取流，普通播放清除旧备用条目', async() => {
+  const song = onlineSong('kw_with_alternative')
+  const alternatives = [onlineSong('wy_alternative', 'wy')]
+  vi.mocked(getMusicUrl).mockResolvedValue(null as any)
+  tempPlayList.push({ listId: 'later', musicInfo: song, isTempPlay: true, alternativeMusicInfos: alternatives })
+  await playNext()
+  await vi.waitFor(() => { expect(getMusicUrl).toHaveBeenCalledWith(expect.objectContaining({ musicInfo: song, alternativeMusicInfos: alternatives })) })
+  playMusicInfoNow(onlineSong('path'), null, alternatives)
+  expect(setPlayMusicInfo).toHaveBeenLastCalledWith(null, expect.objectContaining({ id: 'path' }), true, alternatives)
+  playMusicInfoNow(onlineSong('ordinary'))
+  expect(playMusicInfo.alternativeMusicInfos).toBeUndefined()
 })

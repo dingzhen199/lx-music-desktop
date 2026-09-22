@@ -65,3 +65,20 @@ describe('相似候选缓存（TTL/容量/LRU）', () => {
     expect(cache.get('wy', '1')).toBeNull()
   })
 })
+
+
+it('种子匹配有独立的容量、TTL和账号隔离，clear一并清理', () => {
+  let now = 0
+  const cache = new SimilarCandidateCache(2, 1000, () => now)
+  cache.setSeed('wy', 'anchor-a', '1')
+  cache.setSeed('wy', 'anchor-a', '2', 'other-account')
+  expect(cache.getSeed('wy', 'anchor-a')).toBe('1')
+  expect(cache.getSeed('wy', 'anchor-a', 'other-account')).toBe('2')
+  cache.setSeed('tx', 'anchor-b', '3')
+  expect(cache.getSeed('wy', 'anchor-a')).toBeNull()
+  now = 1001
+  expect(cache.getSeed('tx', 'anchor-b')).toBeNull()
+  cache.setSeed('wy', 'anchor-c', '4')
+  cache.clear()
+  expect(cache.getSeed('wy', 'anchor-c')).toBeNull()
+})

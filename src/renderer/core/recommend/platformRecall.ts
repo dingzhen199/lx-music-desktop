@@ -316,12 +316,15 @@ export const recallPlatformSimilar = async(
   const cache = options.cache ?? similarCache
   const isCancelled = options.isCancelled
   const cancelCheck = (): boolean => Boolean(isCancelled?.())
+  // 包含全部匹配证据，避免同 id 的元数据/版本变更误用旧匹配。
+  const anchorKey = JSON.stringify([anchor.source, anchor.id, anchor.artist, anchor.title, anchor.album, anchor.intervalSec])
 
   const providerResults = await Promise.all(PROVIDER_ORDER.map(async(provider): Promise<ProviderCallResult> => {
     const base = { provider, seedId: null as string | null, fromCache: false }
     if (cancelCheck()) return { ...base, status: 'cancelled', items: [] }
 
-    const located = await locateSeed(provider, anchor, isCancelled)
+    const knownSeed = anchor.seedIds?.[provider] ?? cache.getSeed(provider, anchorKey)
+    const located = knownSeed ? { seedId: knownSeed } : await locateSeed(provider, anchor, isCancelled)
     if (cancelCheck()) return { ...base, status: 'cancelled', items: [] }
     if (!located.seedId) {
       return {
@@ -332,6 +335,7 @@ export const recallPlatformSimilar = async(
       }
     }
     const seedId = located.seedId
+    if (!knownSeed) cache.setSeed(provider, anchorKey, seedId)
 
     // 续补先消费缓存（会话排除/偏好/队列过滤在缓存读取后由 filterFused 重新执行）
     const cached = cache.get(provider, seedId)
