@@ -70,6 +70,18 @@ beforeEach(() => {
 })
 
 describe('平台相似召回：种子定位', () => {
+  it('全局屏蔽候选不占同艺人配额，缓存读取后仍执行当前规则', async() => {
+    const cache = freshCache()
+    mocks.wySimi.mockResolvedValue(simiResult(['a', 'b', 'c', 'd'].map(name => simiRow(name, 'Other Artist'))))
+    await recallPlatformSimilar(anchor, { cache })
+    const result = await recallPlatformSimilar(anchor, { cache, isExcluded: info => ['a', 'b'].includes(info.name) })
+    expect(result.items.map(item => item.title)).toEqual(['c', 'd'])
+    expect(mocks.wySimi).toHaveBeenCalledOnce()
+    const blocked = await recallPlatformSimilar(anchor, { cache, isExcluded: () => true })
+    expect(blocked.state).toBe('empty-after-filter')
+    expect(blocked.items).toEqual([])
+  })
+
   it('已消费的同艺人前两首不占用下一批配额', async() => {
     const cache = freshCache()
     mocks.wySimi.mockResolvedValue(simiResult(['a', 'b', 'c', 'd'].map(name => simiRow(name, 'Other Artist'))))

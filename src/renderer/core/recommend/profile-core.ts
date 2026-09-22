@@ -2,7 +2,7 @@
  * 本地用户画像状态机（纯逻辑，TP-1）。
  *
  * 用户画像的领域状态与转移：行为信号（收藏 love / 听完 complete / 推荐曲快速切走 skip）归并为
- * 艺人维度计数底座（按证据量 Top200 截断）+ 滚动事件缓冲（≤500 FIFO）+ 单调总计数器 + LLM 摘要快照；
+ * 艺人维度计数底座（≤200，保留高证据量与当前行为艺人）+ 滚动事件缓冲（≤500 FIFO）+ 单调总计数器 + LLM 摘要快照；
  * 谓词与构建器：听完判定（isCompleteListen，≥90% 时长）、背书判定（decideEndorsement，仅正向信号且命中
  * 会话推荐集）、本地档排序加成（localBonus，[-10, +10]）、摘要重写条件（summaryDue）与提示词构建
  *（buildSummaryPrompt）、宽松水合（hydrateProfile）。
@@ -69,7 +69,7 @@ export interface ProfileState {
   completes: number
   /** 推荐曲快速切走信号总数。 */
   skips: number
-  /** 艺人计数表（信号增量累计底座；证据量 Top200 截断）。 */
+  /** 艺人计数表（最多 200；本次行为艺人保留，其余按证据量截断）。 */
   artistCounts: Record<string, ArtistCounts>
   /** 滚动事件缓冲（≤500 FIFO）。 */
   events: ProfileEvent[]
@@ -130,16 +130,26 @@ export const isDuplicateLoveSignal = (state: ProfileState | null | undefined, si
 /** 证据量：分信号计数之和（艺人表截断与摘要 Top 排行的共用权重——不分极性，被触达最多的艺人优先保留）。 */
 const evidenceWeight = (entry: ArtistCounts): number => entry.love + entry.complete + entry.skip
 
-/** 艺人表按证据量截断到 MAX_ARTISTS（超出上限时丢弃最轻者；未超限时原样返回，避免无谓的新引用）。 */
-const truncateArtistCounts = (table: Record<string, ArtistCounts>): Record<string, ArtistCounts> => {
+/** 保留高证据量艺人，并为本次行为的艺人留一个学习名额，避免新艺人每次从零开始。 */
+const truncateArtistCounts = (table: Record<string, ArtistCounts>, activeArtist?: string): Record<string, ArtistCounts> => {
   const keys = Object.keys(table)
   if (keys.length <= MAX_ARTISTS) return table
   const keptKeys = keys
     .sort((a, b) => evidenceWeight(table[b]) - evidenceWeight(table[a]))
     .slice(0, MAX_ARTISTS)
+  if (activeArtist && !keptKeys.includes(activeArtist)) keptKeys[keptKeys.length - 1] = activeArtist
   const kept: Record<string, ArtistCounts> = {}
   for (const key of keptKeys) kept[key] = table[key]
   return kept
+}
+
+/** 已淘汰艺人只能恢复近期窗口内的证据；仍在表内的艺人继续使用完整累计计数。 */
+const recentArtistCounts = (events: ProfileEvent[], artist: string): ArtistCounts => {
+  const counts: ArtistCounts = { love: 0, complete: 0, skip: 0 }
+  for (const event of events) {
+    if (event.artist === artist) counts[event.kind]++
+  }
+  return counts
 }
 
 /** 零态画像（首装/快照缺失的水合兜底）。 */
@@ -161,7 +171,7 @@ export const createProfileState = (): ProfileState => ({
  *   语义 = "同一首歌的重复收藏不产生重复证据（含取消后再收藏，窗口内不重复计）"；
  *   这是未加载列表早退发射路径（无法去重）的兜底；complete/skip 不受此限（重复听完/跳过是合法的重复证据）；
  * - 三类总计数器单调 +1（独立于艺人表截断）；
- * - 艺人表对应艺人的分信号计数 +1 后按证据量 Top200 截断；
+ * - 艺人表对应艺人的分信号计数 +1 后截断到 200，保留本次行为艺人及其余高证据量艺人；
  * - 事件缓冲追加 {kind, artist, title} 后按 ≤500 FIFO 丢弃最旧。
  */
 export const reduceProfileSignal = (state: ProfileState | null | undefined, signal: ProfileSignal | null | undefined): ProfileState => {
@@ -177,7 +187,7 @@ export const reduceProfileSignal = (state: ProfileState | null | undefined, sign
   // 原引用返回使编排层不落盘——被吸收的合法 love 是否补广播由编排层决定（计数吸收与背书广播解耦，见 profile.ts emitSignal）
   if (isDuplicateLoveSignal(st, signal)) return st
 
-  const prevEntry = st.artistCounts[artist]
+  const prevEntry = st.artistCounts[artist] ?? recentArtistCounts(st.events, artist)
   const entry: ArtistCounts = {
     love: (prevEntry?.love ?? 0) + (kind === 'love' ? 1 : 0),
     complete: (prevEntry?.complete ?? 0) + (kind === 'complete' ? 1 : 0),
@@ -189,7 +199,7 @@ export const reduceProfileSignal = (state: ProfileState | null | undefined, sign
     loves: st.loves + (kind === 'love' ? 1 : 0),
     completes: st.completes + (kind === 'complete' ? 1 : 0),
     skips: st.skips + (kind === 'skip' ? 1 : 0),
-    artistCounts: truncateArtistCounts({ ...st.artistCounts, [artist]: entry }),
+    artistCounts: truncateArtistCounts({ ...st.artistCounts, [artist]: entry }, artist),
     events: events.length > MAX_EVENTS ? events.slice(events.length - MAX_EVENTS) : events,
     summary: st.summary,
   }

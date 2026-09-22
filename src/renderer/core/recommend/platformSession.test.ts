@@ -83,6 +83,36 @@ beforeEach(async() => {
 afterEach(() => { session.endSession(); vi.useRealTimers(); vi.unstubAllGlobals() })
 
 describe('平台推荐默认路径：零 LLM 与无静默回退（AC3）', () => {
+  it('平台请求中收藏的同曲不入队，也不登记到路径和推荐归属', async() => {
+    let release!: (value: ReturnType<typeof recallOk>) => void
+    mocks.platformRecall.mockImplementationOnce(async() => new Promise(resolve => { release = resolve }))
+    const pending = session.startSession()
+    await vi.waitFor(() => { expect(mocks.platformRecall).toHaveBeenCalledOnce() })
+    mocks.getListMusics.mockResolvedValue([{ id: 'tx_loved', singer: '周杰伦', name: '花海' }])
+    release(recallOk())
+    await pending
+    expect(mocks.addQueue).not.toHaveBeenCalled()
+    expect(session.sessionView.value.path).toEqual([])
+    expect(session.sessionView.value.recommendedIds).toEqual([])
+    expect(session.lastPlatformState.value).toBe('empty-after-filter')
+  })
+
+  it('读取提交前收藏期间收台重开，旧检查完成后不影响新会话', async() => {
+    let release!: (items: any[]) => void
+    mocks.getListMusics.mockResolvedValueOnce([]).mockImplementationOnce(async() => new Promise(resolve => { release = resolve }))
+    const pending = session.startSession()
+    await vi.waitFor(() => { expect(mocks.getListMusics).toHaveBeenCalledTimes(2) })
+    session.endSession()
+    mocks.player.musicInfo = { ...mocks.player.musicInfo, id: 'new-anchor' }
+    await session.startSession()
+    release([])
+    await pending
+    expect(mocks.addQueue).toHaveBeenCalledOnce()
+    expect(session.sessionView.value.anchor.id).toBe('new-anchor')
+    expect(session.sessionView.value.recommendedIds).toEqual(['wy_1'])
+    expect(mocks.queue).toHaveLength(1)
+  })
+
   it('默认模式（含旧 ai.enable=true）：初始推荐走平台路径，0 次 LLM、不进旧引擎', async() => {
     await session.startSession()
     expect(mocks.platformRecall).toHaveBeenCalledTimes(1)

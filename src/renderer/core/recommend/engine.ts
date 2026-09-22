@@ -9,6 +9,7 @@
 import { LIST_IDS } from '@common/constants'
 import type { RecommendLlmProtocol } from '@common/recommendation'
 import { addTempPlayList } from '@renderer/store/player/action'
+import { hasDislike } from '@renderer/store/dislikeList/action'
 import { playProgress } from '@renderer/store/player/playProgress'
 import { playMusicInfo } from '@renderer/store/player/state'
 import { getFeatureCollector, startFeatureCollection, stopFeatureCollection, summarizeBuckets } from './feature'
@@ -47,6 +48,7 @@ import { emptyResultMessage } from './hints'
 import { includesSameSong, pushUniqueSameSong, sameSong } from './sameSong'
 import type { SongRef } from './sameSong'
 import { passesInstrumentalGate, wantsInstrumental } from './vocalGate'
+import { filterForSubmission } from './submission'
 
 /** AI 配置（仅运行时传入，不落盘）。 */
 export interface AiConfig {
@@ -510,6 +512,7 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
   // T-B2：续补时排除本会话已推荐过的候选，避免重复入队（按 id 与 sameSong 双通道，
   // 防同曲不同 id 变体跨批次重复）。
   const pool = filterExcludeTracks(recall.items, options.excludeIds ?? [], options.excludeTracks ?? [])
+    .filter(item => !hasDislike(item.musicInfo))
   if (!pool.length) {
     throw new Error(emptyResultMessage({
       wantsInstrumental: wantsInstrumental(stateWords),
@@ -544,18 +547,7 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
     }))
   }
 
-  // 5. 插入“稍后播放”队列（T-B2：续补模式追加队尾，不重排已计划的路径）
-  checkCancelled()
-  if (options.enqueue !== false) {
-    addTempPlayList(ranked.map(t => ({
-      listId: LIST_IDS.PLAY_LATER,
-      musicInfo: t.musicInfo,
-      isTop: options.appendMode !== 'bottom',
-    })))
-  }
-
-  // 6. 返回视图
-  return {
+  let result: ExploreResult = {
     engine,
     anchor: { artist: anchor.artist, title: anchor.title, album: anchor.album ?? '' },
     position,
@@ -580,6 +572,17 @@ export const exploreOnce = async(options: ExploreOptions = {}): Promise<ExploreR
       aiRankError,
     },
   }
+  checkCancelled()
+  if (options.enqueue !== false) {
+    result = await filterForSubmission(result, { isCancelled: options.isCancelled })
+    const items = result.candidates.flatMap(item => item.musicInfo ? [{
+      listId: LIST_IDS.PLAY_LATER,
+      musicInfo: item.musicInfo,
+      isTop: options.appendMode !== 'bottom',
+    }] : [])
+    if (items.length) addTempPlayList(items)
+  }
+  return result
 }
 
 // ============================ dev 调试入口 ============================

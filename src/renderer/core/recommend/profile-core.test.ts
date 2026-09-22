@@ -2,7 +2,7 @@
  * 本地用户画像状态机的纯逻辑测试（TP-1）。
  *
  * 覆盖：信号归并（reduceProfileSignal：loves/completes/skips 单调总计数、≤500 滚动事件缓冲 FIFO、
- * 艺人表 Top200 截断、垃圾值不污染、不可变转移）、听完判定（isCompleteListen 90% 界点与未知时长）、
+ * 艺人表容量与新艺人学习、垃圾值不污染、不可变转移）、听完判定（isCompleteListen 90% 界点与未知时长）、
  * 背书判定（decideEndorsement：id/同曲变体命中、skip 恒否）、画像加成（localBonus 方向与 ±10 收敛）、
  * 摘要条件（summaryDue）与提示词构建（buildSummaryPrompt 输入口径与 D12 措辞约束）、
  * 宽松水合（hydrateProfile：有效保留、垃圾缺省、重启续增）。
@@ -125,7 +125,7 @@ describe('reduceProfileSignal - 信号归并', () => {
     expect(next.events[MAX_EVENTS - 1]).toEqual({ kind: 'complete', artist: '新艺人', title: '新曲' })
   })
 
-  it('艺人表按证据量截断到上限（连续累计 250 位艺人后恒为 Top200），总计数不受影响', () => {
+  it('连续累计 250 位艺人后表容量仍为 200，总计数不受影响', () => {
     // arrange & act
     let state = createProfileState()
     for (let i = 0; i < MAX_ARTISTS + 50; i++) {
@@ -136,7 +136,7 @@ describe('reduceProfileSignal - 信号归并', () => {
     expect(state.loves).toBe(MAX_ARTISTS + 50)
   })
 
-  it('艺人表截断淘汰证据量最低者：仅 1 条证据的新艺人淘汰于存量高证据表', () => {
+  it('高证据表满额时仍为新艺人保留一个学习名额', () => {
     // arrange
     const seeded: ProfileState = {
       ...createProfileState(),
@@ -147,10 +147,41 @@ describe('reduceProfileSignal - 信号归并', () => {
     const next = reduceProfileSignal(seeded, loveSignal('新艺人', { title: '新曲' }))
     // assert
     expect(Object.keys(next.artistCounts)).toHaveLength(MAX_ARTISTS)
-    expect(next.artistCounts['新艺人']).toBeUndefined()
+    expect(next.artistCounts['新艺人']).toEqual({ love: 1, complete: 0, skip: 0 })
     expect(next.artistCounts['存量艺人0']).toEqual({ love: 2, complete: 0, skip: 0 })
     // 单调总计数器独立于被截断的艺人表继续累计（summaryDue 依赖总计数）
     expect(next.loves).toBe(MAX_ARTISTS * 2 + 1)
+  })
+
+  it('满额后完整听新艺人 100 次，计数持续累计并参与画像加分', () => {
+    let state = createProfileState()
+    for (let i = 0; i < MAX_ARTISTS; i++) state = reduceProfileSignal(state, { kind: 'complete', artist: `Old ${i}`, title: 'Song' })
+    for (let i = 0; i < 100; i++) state = reduceProfileSignal(state, { kind: 'complete', artist: 'New', title: 'Song' })
+    expect(state.artistCounts.New.complete).toBe(100)
+    expect(state.completes).toBe(MAX_ARTISTS + 100)
+    expect(Object.keys(state.artistCounts)).toHaveLength(MAX_ARTISTS)
+    expect(localBonus(state, 'New')).toBe(PROFILE_BONUS_LIMIT)
+  })
+
+  it('交替学习新艺人时从近期事件恢复被淘汰计数，重启后继续且不重复累计总数', () => {
+    let state: ProfileState = {
+      ...createProfileState(),
+      loves: MAX_ARTISTS * 1000,
+      artistCounts: Object.fromEntries(Array.from({ length: MAX_ARTISTS }, (_, i) => [`Old ${i}`, counts(1000)])),
+    }
+    for (let i = 0; i < 20; i++) {
+      state = reduceProfileSignal(state, { kind: 'complete', artist: 'New A', title: 'Song' })
+      state = reduceProfileSignal(state, { kind: 'skip', artist: 'New B', title: 'Song' })
+      state = hydrateProfile(JSON.parse(JSON.stringify(state)))
+    }
+    expect(state.artistCounts['New B'].skip).toBe(20)
+    state = reduceProfileSignal(state, { kind: 'complete', artist: 'New A', title: 'Song' })
+    expect(state.artistCounts['New A'].complete).toBe(21)
+    expect(state.completes).toBe(21)
+    expect(state.skips).toBe(20)
+    expect(state.loves).toBe(MAX_ARTISTS * 1000)
+    expect(Object.keys(state.artistCounts)).toHaveLength(MAX_ARTISTS)
+    expect(state.events).toHaveLength(41)
   })
 })
 

@@ -11,7 +11,9 @@ import type { RecommendLlmParams } from '@common/recommendation'
 vi.mock('@renderer/store/setting', () => ({ appSetting: { 'ai.maxConcurrentRequests': 3 } }))
 vi.mock('@common/rendererIpc', () => ({ rendererInvoke: vi.fn() }))
 vi.mock('@renderer/store/player/action', () => ({ addTempPlayList: vi.fn() }))
-vi.mock('@renderer/store/player/state', () => ({ playMusicInfo: { musicInfo: null } }))
+vi.mock('@renderer/store/player/state', () => ({ playMusicInfo: { musicInfo: null }, tempPlayList: [] }))
+vi.mock('@renderer/store/list/listManage/rendererListManage', () => ({ getListMusics: async() => [] }))
+vi.mock('@renderer/store/list/listManage/state', () => ({ loveList: { id: 'love' } }))
 vi.mock('@renderer/store/player/playProgress', () => ({ playProgress: { nowPlayTimeStr: '00:10' } }))
 vi.mock('./recall', () => ({ recallCandidates: vi.fn() }))
 vi.mock('./feature', () => ({

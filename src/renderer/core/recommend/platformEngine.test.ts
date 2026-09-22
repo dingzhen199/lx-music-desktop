@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { explorePlatformOnce } from './platformEngine'
 import type { PlatformRecallAnchor, PlatformRecallResult } from './platformRecall'
+import { addDislikeInfo, clearDislikeInfo } from '@renderer/store/dislikeList/action'
 
 const mocks = vi.hoisted(() => ({
   recall: vi.fn(),
@@ -37,12 +38,35 @@ const recallResult = (over: Partial<PlatformRecallResult> = {}): PlatformRecallR
 
 beforeEach(() => {
   vi.clearAllMocks()
+  clearDislikeInfo()
   mocks.queue.splice(0)
   mocks.getListMusics.mockResolvedValue([])
   mocks.recall.mockResolvedValue(recallResult())
 })
 
 describe('平台相似推荐引擎', () => {
+  it('平台请求途中收藏候选的跨平台同曲，返回后不入队', async() => {
+    let resolveRecall!: (value: PlatformRecallResult) => void
+    mocks.recall.mockImplementationOnce(async() => new Promise(resolve => { resolveRecall = resolve }))
+    const pending = explorePlatformOnce({ anchor })
+    await vi.waitFor(() => { expect(mocks.recall).toHaveBeenCalledOnce() })
+    mocks.getListMusics.mockResolvedValue([musicInfo('tx_loved', '花海', '周杰伦')])
+    resolveRecall(recallResult())
+    const result = await pending
+    expect(result.candidates).toEqual([])
+    expect(result.meta.state).toBe('empty-after-filter')
+    expect(mocks.addQueue).not.toHaveBeenCalled()
+  })
+
+  it('全局屏蔽歌手既传给召回过滤，也在直接入队前校验', async() => {
+    addDislikeInfo([{ name: '', singer: '周杰伦' }])
+    const result = await explorePlatformOnce({ anchor })
+    expect(mocks.recall.mock.calls[0][1].isExcluded(musicInfo('wy_1', '花海', '周杰伦'))).toBe(true)
+    expect(result.candidates).toEqual([])
+    expect(result.meta.state).toBe('empty-after-filter')
+    expect(mocks.addQueue).not.toHaveBeenCalled()
+  })
+
   it('相似请求期间手动入队的同曲不重复插入', async() => {
     let resolveRecall!: (value: PlatformRecallResult) => void
     mocks.recall.mockImplementationOnce(async() => new Promise(resolve => { resolveRecall = resolve }))

@@ -31,7 +31,7 @@ import type { PlatformRecallAnchor, PlatformRecallState } from './platformRecall
 import { parseIntervalSec } from './seedMatch'
 import { startFeatureCollection, stopFeatureCollection } from './feature'
 import { sameSong } from './sameSong'
-import { filterQueuedResult } from './queue'
+import { filterForSubmission } from './submission'
 import type { RankPathInput, TrackAnalysis } from './prompts'
 import { getProfileState, onProfileSignal, recordRecommendedSkip } from './profile'
 import { decideEndorsement, localBonus } from './profile-core'
@@ -496,7 +496,11 @@ const plan = async(mode: 'initial' | 'refill'): Promise<void> => {
       result = await exploreOnce({ ...options, enqueue: false, isCancelled: () => e !== epoch })
     }
     if (e !== epoch) return
-    result = filterQueuedResult(result, tempPlayList)
+    result = await filterForSubmission(result, {
+      isCancelled: () => e !== epoch,
+      dislikedTracks: () => state.value?.dislikedTracks ?? [],
+    })
+    if (e !== epoch) return
     if (result.engine === 'platform' && result.meta.state === 'ok' && !result.candidates.length) result.meta.state = 'empty-after-filter'
     applyResult(result, { radius: stateAtPlan.radius, instruction: stateAtPlan.instruction })
     refillRetry = 0

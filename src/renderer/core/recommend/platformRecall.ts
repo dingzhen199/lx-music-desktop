@@ -72,6 +72,8 @@ export interface PlatformRecallOptions {
   lovedTracks?: SongRef[]
   /** 明确「不再推荐」的曲目。 */
   dislikedTracks?: SongRef[]
+  /** 应用级屏蔽规则；在多样性与批次裁剪前执行，屏蔽项不占配额。 */
+  isExcluded?: (musicInfo: LX.Music.MusicInfo) => boolean
   /** 本地画像艺人加成（有界次级调整）。 */
   profileBoost?: (artist: string) => number
   /** 单批最多入队数（默认 8）。 */
@@ -297,6 +299,7 @@ const filterFused = (
     if (sameSongIn(options.queueTracks, ref)) { count('queue'); continue }
     if (sameSongIn(options.lovedTracks, ref)) { count('loved'); continue }
     if (sameSongIn(options.dislikedTracks, ref)) { count('disliked'); continue }
+    if (options.isExcluded?.(item.musicInfo)) { count('disliked'); continue }
     kept.push(item)
   }
   // 已消费/收藏等条目不能占用本批配额；续补才能继续消费缓存中的后续候选。
