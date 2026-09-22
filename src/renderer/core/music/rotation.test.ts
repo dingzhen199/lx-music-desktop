@@ -56,6 +56,37 @@ it('主源初始化成功但取流失败时仍按序轮换', async() => {
   expect(mocks.backup).toHaveBeenCalledOnce()
 })
 
+it.each([
+  { name: '音质元数据为空', playQuality: '128k' as const, qualitys: {} },
+  { name: '高音质偏好但元数据为空', playQuality: 'flac' as const, qualitys: {} },
+  { name: '元数据缺少 128k 标记', playQuality: '128k' as const, qualitys: { flac: { size: null } } },
+])('$name 时备源仍尝试默认 128k 取流', async({ playQuality, qualitys }) => {
+  window.lx.apiInitPromise[0] = Promise.resolve(true)
+  appSetting['player.playQuality'] = playQuality
+  const track = { ...musicInfo, meta: { ...musicInfo.meta, _qualitys: qualitys } }
+
+  await expect(handleGetOnlineMusicUrl({ musicInfo: track, isRefresh: true, allowToggleSource: true, onToggleSource: vi.fn() }))
+    .resolves.toMatchObject({ url: 'https://example.test/audio', quality: '128k', musicInfo: track })
+  expect(mocks.primary).toHaveBeenCalledWith(track, '128k')
+  expect(mocks.backup).toHaveBeenCalledExactlyOnceWith(track, '128k')
+})
+
+it('跨提供方候选缺少音质元数据时也可由备源默认取流', async() => {
+  const track = { ...musicInfo, meta: { ...musicInfo.meta, _qualitys: {} } }
+
+  await expect(getOnlineOtherSourceMusicUrl({ musicInfos: [track], isRefresh: true, onToggleSource: vi.fn() }))
+    .resolves.toMatchObject({ url: 'https://example.test/audio', quality: '128k', musicInfo: track })
+  expect(mocks.backup).toHaveBeenCalledExactlyOnceWith(track, '128k')
+})
+
+it('缺少音质元数据时不把显式指定的音质改为默认 128k', async() => {
+  const track = { ...musicInfo, meta: { ...musicInfo.meta, _qualitys: {} } }
+
+  await expect(getOnlineOtherSourceMusicUrl({ musicInfos: [track], quality: '320k', isRefresh: true, onToggleSource: vi.fn() }))
+    .rejects.toThrow('toggle_source_failed')
+  expect(mocks.backup).not.toHaveBeenCalled()
+})
+
 it('显式禁止换源时不使用备源', async() => {
   await expect(handleGetOnlineMusicUrl({ musicInfo, isRefresh: true, allowToggleSource: false, onToggleSource: vi.fn() }))
     .rejects.toThrow('source init failed')

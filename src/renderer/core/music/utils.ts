@@ -275,7 +275,8 @@ const fetchMusicUrlWithRotation = async({ musicInfo, quality, onToggleApiSource,
   if (!allowToggleSource) throw firstError
   for (const apiId of buildBackupApiIds(sourceRotationEnv(), musicInfo.source)) {
     const itemQuality = quality ?? getPlayQuality(appSetting['player.playQuality'], musicInfo, apiId)
-    if (!musicInfo.meta._qualitys[itemQuality]) continue
+    // 自动选档允许与主源一致的 128k 兜底，平台元数据缺失不代表无法取流；显式音质仍须校验。
+    if (quality != null && !musicInfo.meta._qualitys[itemQuality]) continue
     onToggleApiSource?.()
     try {
       const { url, type } = await fetchMusicUrlByApi(musicInfo, itemQuality, apiId)
