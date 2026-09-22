@@ -13,7 +13,11 @@ const apiStatusMap = new Map<string, LX.UserApi.UserApiStatus>()
 let primaryApiId: string | null = null
 /** 备源 api id 列表（有序，播放取流失败时按序轮换） */
 let backupApiIds: string[] = []
-const requestQueue = new Map()
+const requestQueue = new Map<string, {
+  apiId: string
+  resolve: (value: any) => void
+  reject: (error: Error) => void
+}>()
 const timeouts = new Map<string, NodeJS.Timeout>()
 // 主源、备源及关窗操作串行执行，避免重开窗口与上一轮销毁交错。
 let windowUpdate: Promise<void> = Promise.resolve()
@@ -69,9 +73,9 @@ export const init = () => {
     requestQueue.delete(requestKey)
     clearRequestTimeout(requestKey)
     if (status) {
-      request[0](result)
+      request.resolve(result)
     } else {
-      request[1](new Error(message))
+      request.reject(new Error(message))
     }
   }
   const handleOpenDevTools = ({ event }: LX.IpcMainEvent) => {
@@ -129,6 +133,9 @@ export const unloadApi = async(apiId: string) => {
   if (!loadedApis.has(apiId)) return
   loadedApis.delete(apiId)
   apiStatusMap.delete(apiId)
+  for (const [key, request] of requestQueue) {
+    if (request.apiId === apiId) cancelRequest(key)
+  }
   await closeWindow(apiId)
 }
 
@@ -187,9 +194,9 @@ export const setAllowShowUpdateAlert = (id: string, enable: boolean) => {
 }
 
 export const cancelRequest = (requestKey: string) => {
-  if (!requestQueue.has(requestKey)) return
   const request = requestQueue.get(requestKey)
-  request[1](new Error('Cancel request'))
+  if (!request) return
+  request.reject(new Error('Cancel request'))
   requestQueue.delete(requestKey)
   clearRequestTimeout(requestKey)
 }
@@ -213,7 +220,8 @@ export const request = async({ requestKey, data }: LX.UserApi.UserApiRequestPara
     cancelRequest(requestKey)
   }, 20000))
 
-  requestQueue.set(requestKey, [resolve, reject, data])
+  // 保存实际路由的音源，兼容 data 未显式指定 apiId 的主源请求。
+  requestQueue.set(requestKey, { apiId, resolve, reject })
   sendRequest({ requestKey, data, apiId })
 })
 

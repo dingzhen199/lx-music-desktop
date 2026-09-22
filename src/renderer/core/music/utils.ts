@@ -304,22 +304,21 @@ export const getOnlineOtherSourceMusicUrl = async({ musicInfos, quality, onToggl
 
   const env = sourceRotationEnv()
   let musicInfo: LX.Music.MusicInfoOnline | null = null
-  let itemQuality: LX.Quality | null = null
   // eslint-disable-next-line no-cond-assign
   while (musicInfo = (musicInfos.shift()!)) {
     if (retryedSource.includes(musicInfo.source)) continue
     retryedSource.push(musicInfo.source)
     // 主源或任一备源可服务即不跳过（仅主源不支持的平台可能由备源救回）
     if (!isProviderServable(env, musicInfo.source)) continue
-    itemQuality = quality ?? getPlayQuality(appSetting['player.playQuality'], musicInfo)
-    if (!musicInfo.meta._qualitys[itemQuality]) continue
 
     console.log('try toggle to: ', musicInfo.source, musicInfo.name, musicInfo.singer, musicInfo.interval)
     onToggleSource(musicInfo)
     break
   }
-  if (!musicInfo || !itemQuality) throw new Error(window.i18n.t('toggle_source_failed'))
+  if (!musicInfo) throw new Error(window.i18n.t('toggle_source_failed'))
 
+  // 主源音质仅用于查询缓存，不能据此淘汰提供方；取流时各音源独立选档。
+  const itemQuality = quality ?? getPlayQuality(appSetting['player.playQuality'], musicInfo)
   const cachedUrl = await getStoreMusicUrl(musicInfo, itemQuality)
   if (cachedUrl && !isRefresh) return { url: cachedUrl, musicInfo, quality: itemQuality, isFromCache: true }
 

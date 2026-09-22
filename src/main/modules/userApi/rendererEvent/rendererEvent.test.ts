@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import names from './name'
 import type * as ApiModule from './rendererEvent'
 
@@ -29,6 +29,7 @@ vi.mock('@main/modules/winMain', () => ({ sendStatusChange: mocks.status, sendSh
 let api: typeof ApiModule
 beforeEach(async() => {
   vi.resetModules()
+  vi.useFakeTimers()
   vi.clearAllMocks()
   mocks.windows.clear()
   mocks.handlers.clear()
@@ -41,6 +42,10 @@ beforeEach(async() => {
   })
   api = await import('./rendererEvent')
   api.init()
+})
+afterEach(async() => {
+  await api.unloadAllApis()
+  vi.useRealTimers()
 })
 
 const ready = (id: string) => {
@@ -124,5 +129,38 @@ describe('自定义音源生命周期', () => {
     const rejected = expect(request).rejects.toThrow('Cancel request')
     await api.unloadAllApis()
     await rejected
+  })
+
+  it.each(['disable', 'remove'])('单独卸载备源即时结束其请求，保留其他源请求（%s）', async(action) => {
+    await api.setApi('user_api_primary')
+    await api.setBackups(['user_api_backup'])
+    const primarySettled = vi.fn()
+    const backupRejected = vi.fn()
+    const primary = api.request({ requestKey: 'primary-pending', data: { action: 'musicUrl' } }).then(primarySettled, primarySettled)
+    const backup = api.request({ requestKey: 'backup-pending', data: { apiId: 'user_api_backup', action: 'musicUrl' } }).catch(backupRejected)
+    if (action === 'disable') await api.setBackups([])
+    else await api.unloadApi('user_api_backup')
+    await Promise.resolve()
+
+    expect(backupRejected).toHaveBeenCalledWith(expect.objectContaining({ message: 'Cancel request' }))
+    expect(primarySettled).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(1)
+    mocks.handlers.get(names.response)!({ params: { status: true, data: { requestKey: 'primary-pending', result: 'primary-url' } } })
+    await Promise.all([primary, backup])
+    expect(primarySettled).toHaveBeenCalledWith('primary-url')
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('未显式指定 apiId 的请求也按发起时主源归属清理', async() => {
+    await api.setApi('user_api_primary')
+    const rejected = vi.fn()
+    const pending = api.request({ requestKey: 'implicit-primary', data: { action: 'musicUrl' } }).catch(rejected)
+    await api.setApi('user_api_backup')
+    await Promise.resolve()
+    expect(rejected).toHaveBeenCalledWith(expect.objectContaining({ message: 'Cancel request' }))
+    expect(vi.getTimerCount()).toBe(0)
+    await pending
+    expect(api.getStatus().status).toBe(false)
+    expect(mocks.windows.has('user_api_backup')).toBe(true)
   })
 })
