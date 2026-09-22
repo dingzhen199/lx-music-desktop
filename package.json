@@ -1,6 +1,6 @@
 {
   "name": "lx-music-desktop",
-  "version": "2.12.3",
+  "version": "2.12.6",
   "description": "一个免费的音乐查找助手",
   "main": "./dist/main.js",
   "scripts": {
@@ -124,7 +124,7 @@
     "css-loader": "^7.1.5",
     "css-minimizer-webpack-plugin": "^8.0.0",
     "del": "^6.1.1",
-    "electron": "42.11.3",
+    "electron": "42.11.6",
     "electron-builder": "^26.15.7",
     "electron-debug": "^3.2.0",
     "electron-devtools-installer": "github:lyswhut/electron-devtools-installer#64596d615c1fc891eefd8aef1dfcb2c87aaadf03",
@@ -162,14 +162,14 @@
     "vitest": "^3.2.7",
     "vue-eslint-parser": "^9.4.3",
     "vue-loader": "^17.4.2",
-    "webpack": "5.107.2",
+    "webpack": "5.106.2",
     "webpack-cli": "^7.2.3",
     "webpack-dev-server": "5.2.6",
     "webpack-hot-middleware": "github:lyswhut/webpack-hot-middleware#329c4375134b89d39da23a56a94db651247c74a1",
     "webpack-merge": "^6.0.1"
   },
   "dependencies": {
-    "@simonwep/pickr": "^1.10.2",
+    "@simonwep/pickr": "1.9.1",
     "better-sqlite3": "^13.0.3",
     "bufferutil": "^4.1.0",
     "comlink": "~4.3.1",
