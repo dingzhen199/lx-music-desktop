@@ -33,6 +33,7 @@ export const validateLlmParams = (params: unknown): void => {
   if (!isValidText(p.model, MAX_FIELD_LENGTH)) throw new Error('LLM model 未配置或格式非法')
   if (p.baseUrl != null && (typeof p.baseUrl !== 'string' || p.baseUrl.length > MAX_FIELD_LENGTH)) throw new Error('LLM baseUrl 格式非法')
   if (p.protocol != null && !PROTOCOLS.includes(p.protocol)) throw new Error('LLM protocol 不支持')
+  if (p.maxTokens != null && (!Number.isInteger(p.maxTokens) || p.maxTokens < 1 || p.maxTokens > 384_000)) throw new Error('LLM maxTokens 格式非法')
   if (!Array.isArray(p.messages) || !p.messages.length) throw new Error('LLM messages 不能为空')
   for (const message of p.messages) {
     if (!message || typeof message !== 'object' || Array.isArray(message) || !MESSAGE_ROLES.includes(message.role) || !isValidText(message.content, MAX_MESSAGE_LENGTH)) throw new Error('LLM message 格式非法')

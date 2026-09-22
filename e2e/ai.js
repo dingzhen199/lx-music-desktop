@@ -43,7 +43,8 @@ async function nav(window, hash) {
     console.log(`${ok ? 'PASS' : 'FAIL'} | ${name}${detail ? ' | ' + detail : ''}`)
   }
 
-  const { app, window } = await launchApp()
+  // 平台相似推荐合入后：AI 路径需显式 recommend.engine='ai'（ai.enable 不再隐式路由 AI 引擎）
+  const { app, window } = await launchApp({ extraSettings: { 'recommend.engine': 'ai' } })
   const errors = collectErrors(window)
   const warns = []
   window.on('console', m => {
@@ -56,7 +57,7 @@ async function nav(window, hash) {
   {
     await nav(window, '#/setting')
     await window.waitForTimeout(1000)
-    await window.getByText('AI 推荐').first().click()
+    await window.getByText('AI 分析与排序（可选）').first().click()
     await window.waitForTimeout(800)
     await window.getByPlaceholder('如 https://api.openai.com/v1 或 https://api.anthropic.com/v1').fill(mock.baseUrl)
     await window.getByPlaceholder('仅保存在本机，请勿分享').fill('test-key')

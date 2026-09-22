@@ -26,6 +26,7 @@ export type RecallCandidate = TrackLike & {
   musicInfo: LX.Music.MusicInfo
   /** 感知距离（0-100，仅排序阶段参与语义判定）。 */
   distance: number
+  vocalType?: 'instrumental' | 'vocal' | 'unknown'
 }
 
 /** 一条召回查询。reason 仅语义方向携带（逐条理由，回写候选的 semanticReason；同艺人方向无）。 */

@@ -18,6 +18,11 @@ dd
       | {{ $t('setting__ai_model') }}
       base-input.gap-left(:model-value="appSetting['ai.model']" :placeholder="$t('setting__ai_model_tip')" @update:model-value="setModel")
     .p
+      | {{ $t('setting__ai_concurrency') }}
+      span.select
+        base-selection#setting_ai_concurrency(:model-value="concurrency" :list="concurrencyList" item-key="id" item-name="name" @update:model-value="setConcurrency")
+    .p.small {{ $t('setting__ai_concurrency_tip') }}
+    .p
       base-btn.btn(min :disabled="aiTestState === 'testing'" @click="handleTestConnect") {{ $t('setting__ai_test_btn') }}
       span.gap-left(:class="{ [$style.testing]: aiTestState === 'testing', [$style.ok]: aiTestState === 'ok', [$style.fail]: aiTestState === 'fail' || aiTestState === 'needConfig' }") {{ aiTestText }}
     .p.small
@@ -25,6 +30,8 @@ dd
 
   h3#recommend_default {{ $t('setting__recommend') }}
   div
+    .p.small
+      | {{ $t('setting__recommend_tip') }}
     .p
       | {{ $t('setting__recommend_radius') }}
       base-slider-bar.gap-left(:class="$style.radiusSlider" :value="appSetting['recommend.radius']" :min="10" :max="90" :step="5" @change="setRadius")
@@ -40,6 +47,7 @@ import { appSetting, updateSetting } from '@renderer/store/setting'
 import { debounce } from '@common/utils'
 import { computed, ref } from '@common/utils/vueTools'
 import { useI18n } from '@renderer/plugins/i18n'
+import { LLM_MAX_CONCURRENCY, normalizeLlmConcurrency } from '@common/recommendationConfig'
 import { llmComplete } from '@renderer/core/recommend/llm'
 
 export default {
@@ -50,6 +58,9 @@ export default {
       { id: 'openai-compatible', name: 'OpenAI-compatible' },
       { id: 'anthropic', name: 'Anthropic' },
     ]
+    const concurrency = computed(() => normalizeLlmConcurrency(appSetting['ai.maxConcurrentRequests']))
+    const concurrencyList = Array.from({ length: LLM_MAX_CONCURRENCY }, (_, i) => ({ id: i + 1, name: String(i + 1) }))
+    const setConcurrency = value => { updateSetting({ 'ai.maxConcurrentRequests': normalizeLlmConcurrency(value) }) }
     const setBaseUrl = debounce(value => {
       updateSetting({ 'ai.baseUrl': value.trim() })
     }, 500)
@@ -113,6 +124,9 @@ export default {
       updateSetting,
       t,
       providerList,
+      concurrency,
+      concurrencyList,
+      setConcurrency,
       setBaseUrl,
       setApiKey,
       setModel,

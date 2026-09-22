@@ -245,7 +245,13 @@ export const listMusicClear = (ids: string[]): string[] => {
 
 export const listMusicAdd = (id: string, musicInfos: LX.Music.MusicInfo[], addMusicLocationType: LX.AddMusicLocationType): string[] => {
   const targetList = allMusicList.get(id)
-  if (!targetList) return id == loveList.id ? [id] : []
+  if (!targetList) {
+    // TP-2 画像收藏捕获点（D10/D13 补裁）：allMusicList 懒加载（getListMusics 才填充），列表未进过内存时
+    // 此早退会让收藏信号永久丢失——按原始入参发射（此刻无列表无法去重），重复收藏/取消后再收藏的幂等
+    // 下沉到 profile-core.reduceProfileSignal 的同曲 love 去重兜底；早退返回值等运行语义不变
+    if (id == loveList.id && musicInfos.length) window.app_event.loveListMusicsAdded(musicInfos)
+    return id == loveList.id ? [id] : []
+  }
 
   const listSet = new Set<string>()
   for (const item of targetList) listSet.add(item.id)
@@ -264,6 +270,11 @@ export const listMusicAdd = (id: string, musicInfos: LX.Music.MusicInfo[], addMu
       arrPush(targetList, musicInfos)
       break
   }
+
+  // TP-2 画像收藏捕获点（D10/D13）：仅去重过滤后仍有实际新增时经 app_event 桥通知（零 import 边）；
+  // listMusicMove 委托本函数故 move-into-love 自动覆盖，sync 远端合入同走本函数计入；
+  // 整单恢复/迁移经 overwriteMusicList 不经由本函数，不产生信号
+  if (id == loveList.id && musicInfos.length) window.app_event.loveListMusicsAdded(musicInfos)
 
   return [id]
 }

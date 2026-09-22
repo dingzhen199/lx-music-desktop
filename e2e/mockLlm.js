@@ -34,7 +34,7 @@ function startMockLlm(opts = {}) {
       try { body = JSON.parse(raw) } catch {}
       requests.push({
         url: req.url,
-        system: body?.messages?.find(m => m.role === 'system')?.content?.slice(0, 120) ?? '',
+        system: body?.messages?.find(m => m.role === 'system')?.content ?? '',
         userLen: body?.messages?.at(-1)?.content?.length ?? 0,
       })
       try {
@@ -67,7 +67,7 @@ function startMockLlm(opts = {}) {
   })
   return new Promise(resolve => {
     server.listen(port, '127.0.0.1', () => {
-      resolve({ baseUrl: `http://127.0.0.1:${port}/v1`, requests, close: () => new Promise(r => server.close(r)) })
+      resolve({ baseUrl: `http://127.0.0.1:${port}/v1`, requests, close: () => new Promise(resolve => server.close(resolve)) })
     })
   })
 }

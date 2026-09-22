@@ -127,6 +127,9 @@ export const importUserApi = async(fileText: string) => {
 export const setUserApi = async(source: LX.UserApi.UserApiSetApiParams): Promise<void> => {
   return rendererInvoke<LX.UserApi.UserApiSetApiParams>(WIN_MAIN_RENDERER_EVENT_NAME.set_user_api, source)
 }
+export const setUserApiBackups = async(apiIds: LX.UserApi.UserApiSetApiBackupsParams): Promise<void> => {
+  return rendererInvoke<LX.UserApi.UserApiSetApiBackupsParams>(WIN_MAIN_RENDERER_EVENT_NAME.set_user_api_backups, apiIds)
+}
 export const removeUserApi = async(ids: string[]) => {
   return rendererInvoke<string[], LX.UserApi.UserApiInfo[]>(WIN_MAIN_RENDERER_EVENT_NAME.remove_user_api, ids)
 }
@@ -306,6 +309,19 @@ export const saveRecommendMetrics = (metrics: unknown) => {
 // 获取探索电台本地指标快照（无存档为 null，由调用方 hydrate 归一）
 export const getRecommendMetrics = async() => {
   return rendererInvoke<string, unknown>(WIN_MAIN_RENDERER_EVENT_NAME.get_data, DATA_KEYS.recommendMetrics)
+}
+
+// TP-2（D8）：本地用户画像快照（单 JSON，不进设置项）；
+// 与 recommendMetrics 同一通用管道：unknown 透传，快照形状归 profile-core 所有，类型收口在特性门面 data.ts
+export const saveRecommendProfile = (profile: unknown) => {
+  rendererSend(WIN_MAIN_RENDERER_EVENT_NAME.save_data, {
+    path: DATA_KEYS.recommendProfile,
+    data: profile,
+  })
+}
+// 获取本地用户画像快照（无存档为 null，由调用方 hydrate 归一）
+export const getRecommendProfile = async() => {
+  return rendererInvoke<string, unknown>(WIN_MAIN_RENDERER_EVENT_NAME.get_data, DATA_KEYS.recommendProfile)
 }
 
 

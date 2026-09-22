@@ -10,6 +10,8 @@
  * 本模块不依赖任何 lx 运行时模块（无 @common/@renderer/electron 与 IPC 依赖），由 vitest 直接测试。
  */
 
+import { candidateIsInstrumental, wantsInstrumental } from './vocalGate'
+
 /** 连续性的七个感知维度（与 from-here continuity 结构一致）。 */
 export type ContinuityKey =
   | 'vocal'
@@ -359,6 +361,8 @@ export function exclusionHit(track: TrackLike, excludes: string): boolean {
   if (!words.length) return false
   const hay = `${track.title ?? ''} ${track.artist ?? ''} ${track.album ?? ''} ${(track.tags ?? []).join(' ')}`.toLowerCase()
   for (const w of words) {
+    // “不要人声”不能因为“无人声”包含“人声”二字而排除器乐元数据。
+    if (w === '人声' && candidateIsInstrumental(track)) continue
     if (['edm', '电子'].includes(w) && /(edm|electronic|house|techno|电子)/i.test(hay)) return true
     if (['太欢快', '欢快', '快乐'].includes(w) && /(happy|upbeat|欢快|快乐|活力)/i.test(hay)) return true
     if (w.length > 1 && hay.includes(w)) return true
@@ -380,6 +384,7 @@ export function likelyDerivative(track: TrackLike): boolean {
 export function transformationAllowed(text = ''): boolean {
   const s = String(text || '')
   if (/(?:不要|别|不想|避免)[^，,。；;]{0,12}(?:纯音乐|器乐|instrumental|翻奏|翻唱|cover|tribute|karaoke)/i.test(s)) return false
+  if (wantsInstrumental(s)) return true
   return /(?:想听|想要|来点|可以|允许|多一点|更)[^，,。；;]{0,12}(?:纯音乐|器乐|instrumental|翻奏|翻唱|cover|tribute|karaoke)|^(?:纯音乐|器乐|instrumental)$/i.test(s.trim())
 }
 
@@ -392,16 +397,16 @@ export function analysisSuggestsVocal(analysis: AnalysisShape | null | undefined
 
 /** anchor 人声关键而候选纯器乐 → 失配（用户明确要求纯音乐/器乐时豁免）。 */
 export function vocalMismatch(track: TrackLike, analysis: AnalysisShape | null | undefined, stateWords = ''): boolean {
-  if (!analysis || transformationAllowed(stateWords) || !analysisSuggestsVocal(analysis)) return false
+  if (!analysis || wantsInstrumental(stateWords) || transformationAllowed(stateWords) || !analysisSuggestsVocal(analysis)) return false
   const hay = `${track.artist ?? ''} ${track.title ?? ''} ${track.album ?? ''} ${(track.tags ?? []).join(' ')}`.toLowerCase()
   return /(instrumental|纯音乐|伴奏)/i.test(hay)
 }
 
 /**
  * 粗粒度世界断裂：近距离（<=45）内 acoustic/folk → 四踩 EDM、核心人声 → 纯器乐。
- * 保留 from-here 的边界行为：候选文本带上艺人/标题后几乎不会命中“纯音乐”独立豁免。
+ * 用户明确要求器乐时只豁免人声转换，其他风格断裂仍拦截。
  */
-export function coarseWorldBreak(track: TrackLike, analysis: AnalysisShape | null | undefined, radius: number | string): boolean {
+export function coarseWorldBreak(track: TrackLike, analysis: AnalysisShape | null | undefined, radius: number | string, stateWords = ''): boolean {
   if (Number(radius) > 45) return false
   const anchorText = JSON.stringify(analysis?.fingerprint ?? {}).toLowerCase()
   const candidateText = `${track.artist ?? ''} ${track.title ?? ''} ${track.album ?? ''} ${(track.tags ?? []).join(' ')}`.toLowerCase()
@@ -410,7 +415,7 @@ export function coarseWorldBreak(track: TrackLike, analysis: AnalysisShape | nul
   const anchorVocal = analysisSuggestsVocal(analysis)
   const candidateInstrumental = /(instrumental|纯音乐|伴奏)/i.test(candidateText)
   if (anchorOrganic && candidateDance) return true
-  if (anchorVocal && candidateInstrumental && !transformationAllowed(candidateText)) return true
+  if (anchorVocal && candidateInstrumental && !wantsInstrumental(stateWords) && !transformationAllowed(stateWords)) return true
   return false
 }
 

@@ -47,6 +47,7 @@ export const DATA_KEYS = {
   lastStartInfo: 'lastStartInfo',
 
   recommendMetrics: 'recommendMetrics',
+  recommendProfile: 'recommendProfile',
 } as const
 
 export const DEFAULT_SETTING = {

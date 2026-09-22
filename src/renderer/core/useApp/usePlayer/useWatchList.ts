@@ -14,7 +14,7 @@ export default () => {
     if (isSkip) return
 
     const { playIndex } = updatePlayIndex()
-    if (playIndex < 0) { // 歌曲被移除
+    if (playIndex < 0 && !playMusicInfo.isTempPlay) { // 普通列表歌曲被移除；临时播放不要求仍在原列表中
       if (window.lx.isPlayedStop) {
         stop()
         setTimeout(() => {

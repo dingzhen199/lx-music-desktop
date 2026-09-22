@@ -1,5 +1,6 @@
 import path from 'node:path'
 import os from 'node:os'
+import { LLM_DEFAULT_CONCURRENCY } from './recommendationConfig'
 
 const isMac = process.platform == 'darwin'
 const isWin = process.platform == 'win32'
@@ -12,6 +13,7 @@ const defaultSetting: LX.AppSetting = {
   'common.startInFullscreen': false,
   'common.langId': null,
   'common.apiSource': 'temp',
+  'common.apiSourceBackups': [],
   'common.sourceNameType': 'alias',
   'common.font': '',
   'common.isShowAnimation': true,
@@ -162,7 +164,9 @@ const defaultSetting: LX.AppSetting = {
   'ai.baseUrl': '',
   'ai.apiKey': '',
   'ai.model': '',
+  'ai.maxConcurrentRequests': LLM_DEFAULT_CONCURRENCY,
 
+  'recommend.engine': 'platform',
   'recommend.radius': 35,
   'recommend.autoRefill': true,
   'recommend.radio': false,

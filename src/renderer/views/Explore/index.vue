@@ -29,8 +29,8 @@
           </div>
         </div>
 
-        <!-- 距离滑杆 + 一句话约束 -->
-        <div :class="$style.controls">
+        <!-- 距离滑杆 + 一句话约束（仅旧引擎：平台推荐无听感距离/自由文本听感指令语义） -->
+        <div v-if="!isPlatformEngine" :class="$style.controls">
           <div :class="$style.row">
             <span :class="$style.label">{{ t('explore__distance') }}</span>
             <div :class="$style.radiusSlider">
@@ -50,17 +50,28 @@
           <span v-if="refillState === 'refilling'">{{ t('explore__refilling') }}</span>
           <span v-else-if="refillState === 'retrying'">{{ t('explore__retrying') }}</span>
           <span v-else-if="lastErrorText">{{ lastErrorKind === 'refill' ? t('explore__refill_failed') : t('explore__plan_failed') }}</span>
-          <span v-else-if="lastResultEngine">{{ lastResultEngine === 'ai' ? t('explore__engine_ai') : t('explore__engine_local') }}</span>
+          <span v-else-if="isPlatformEngine && platformStateText">{{ platformStateText }}</span>
+          <span v-else-if="lastResultEngine">{{ engineLabel }}</span>
           <!-- 本地计划时展示 AI 排序失败原因，让失败可见 -->
           <div v-if="lastResultEngine === 'local' && lastAiRankError" :class="$style.aiRankError">
             {{ t('explore__ai_rank_failed') }}{{ truncateText(lastAiRankError, 200) }}
           </div>
+          <!-- 平台推荐：部分来源失败的非阻断提示（其余来源结果照常展示） -->
+          <div v-if="isPlatformEngine && lastResultEngine === 'platform' && platformSourceError" :class="$style.aiRankError">
+            {{ t('explore__partial_source_failed') }}{{ truncateText(platformSourceError, 120) }}
+          </div>
         </div>
 
-        <!-- 反馈 -->
+        <!-- 反馈：平台推荐为「喜欢这首 / 不再推荐这首」（与收藏无关）；旧引擎保留距离语义反馈 -->
         <div :class="$style.feedback">
-          <button :class="$style.btn" @click="handleFeedback('good')">{{ t('explore__feedback_good') }}</button>
-          <button :class="$style.btn" @click="handleFeedback('far')">{{ t('explore__feedback_far') }}</button>
+          <template v-if="isPlatformEngine">
+            <button :class="$style.btn" @click="handleFeedback('good')">{{ t('explore__feedback_like') }}</button>
+            <button :class="$style.btn" @click="handleFeedback('dislike')">{{ t('explore__feedback_dislike') }}</button>
+          </template>
+          <template v-else>
+            <button :class="$style.btn" @click="handleFeedback('good')">{{ t('explore__feedback_good') }}</button>
+            <button :class="$style.btn" @click="handleFeedback('far')">{{ t('explore__feedback_far') }}</button>
+          </template>
         </div>
       </div>
 
@@ -79,7 +90,8 @@
               </div>
               <div :class="$style.reason">{{ item.reason }}</div>
             </div>
-            <span :class="[$style.role, $style[`role_${item.journeyRole}`]]">{{ roleLabel(item.journeyRole) }}</span>
+            <!-- 弧线角色徽章仅旧引擎（平台推荐无角色语义，不展示伪标签） -->
+            <span v-if="!isPlatformEngine" :class="[$style.role, $style[`role_${item.journeyRole}`]]">{{ roleLabel(item.journeyRole) }}</span>
           </div>
         </div>
       </div>
@@ -89,6 +101,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from '@common/utils/vueTools'
+import { normalizeRecommendEngine } from '@common/recommendationConfig'
 import { useI18n } from '@renderer/plugins/i18n'
 import { playMusicInfo } from '@renderer/store/player/state'
 import { appSetting, updateSetting } from '@renderer/store/setting'
@@ -97,6 +110,8 @@ import {
   lastAiRankError,
   lastErrorKind,
   lastErrorText,
+  lastPlatformSourceError,
+  lastPlatformState,
   lastResultEngine,
   playPathItem,
   refillState,
@@ -106,9 +121,12 @@ import {
 } from '@renderer/core/recommend/session'
 import { debounce } from '@common/utils'
 import { groupPathByBatch } from '@renderer/core/recommend/session-core'
-import type { PathBatch, SessionPathItem } from '@renderer/core/recommend/session-core'
+import type { FeedbackKind, PathBatch, SessionPathItem } from '@renderer/core/recommend/session-core'
 
 const t = useI18n()
+
+/** 当前引擎模式：平台相似推荐为默认（旧 ai/local 值兼容加载）。 */
+const isPlatformEngine = computed(() => normalizeRecommendEngine(appSetting['recommend.engine']) === 'platform')
 
 const anchorPicError = ref(false)
 // 一句话约束草稿：受控本地值，点击“发送”/按 Enter 才提交（不再 debounce 自动重排）
@@ -134,9 +152,12 @@ const pathItems = computed<PathViewItem[]>(() => sessionView.value.path.map((ite
 // 注：类型别名引用 imported 类型而非本地 const（compileScript 会把顶层 type 提到 setup 之外）。
 type PathViewItem = SessionPathItem & { isCurrent: boolean, no: number, key: string }
 
-/** 组头文案：第 N 批 · 距离 {radius} · 约束 {instruction} · {engine}（约束空/无 batch 用“无”兜底）。 */
+/** 组头文案：平台推荐批次无距离/约束语义，用独立模板；旧引擎保留三元组模板。 */
 const buildBatchHeader = (batch: PathBatch | null | undefined, index: number): string => {
-  const engine = batch ? t(batch.engine === 'ai' ? 'explore__engine_ai' : 'explore__engine_local') : ''
+  const engine = batch ? t(batch.engine === 'ai' ? 'explore__engine_ai' : batch.engine === 'platform' ? 'explore__engine_platform' : 'explore__engine_local') : ''
+  if (batch?.engine === 'platform') {
+    return t('explore__path_batch_header_platform', { index, engine: engine || '—' })
+  }
   return t('explore__path_batch_header', {
     index,
     radius: batch ? batch.radius : '—',
@@ -165,6 +186,28 @@ const distanceWords = computed(() => {
   if (radius <= 65) return t('explore__distance_far')
   return t('explore__distance_farthest')
 })
+
+/** 引擎标签（状态行展示）。 */
+const engineLabel = computed(() => {
+  const engine = lastResultEngine.value
+  if (engine === 'platform') return t('explore__engine_platform')
+  if (engine === 'ai') return t('explore__engine_ai')
+  return t('explore__engine_local')
+})
+
+/** 平台推荐可区分空态文案（候选用尽/无匹配/空结果/过滤完）。 */
+const platformStateText = computed(() => {
+  switch (lastPlatformState.value) {
+    case 'exhausted': return t('explore__state_exhausted')
+    case 'no-match': return t('explore__state_no_match')
+    case 'empty': return t('explore__state_empty')
+    case 'empty-after-filter': return t('explore__state_empty_after_filter')
+    default: return ''
+  }
+})
+
+/** 平台推荐部分来源失败的非阻断提示。 */
+const platformSourceError = computed(() => lastPlatformSourceError.value)
 
 const roleLabel = (role: string): string => {
   switch (role) {
@@ -195,7 +238,7 @@ const truncateText = (text: string, max: number): string => {
   return s.length > max ? `${s.slice(0, max)}…` : s
 }
 
-const handleFeedback = (kind: 'far' | 'good') => {
+const handleFeedback = (kind: FeedbackKind) => {
   applyFeedback(kind)
 }
 

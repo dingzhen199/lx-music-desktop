@@ -158,6 +158,15 @@ export class AppEvent extends Event {
     this.emit('myListUpdate', ids)
   }
 
+  /**
+   * 「我喜欢」实际新增收藏事件（TP-2 画像收藏信号桥，D10/D11）：
+   * 由 listMusicAdd 在按 id 去重过滤后仍有实际新增时发射，携带实际新增的曲目；
+   * 取消收藏不发射，整单恢复/迁移（overwriteMusicList 路径）不发射（D13）。
+   */
+  loveListMusicsAdded(musicInfos: LX.Music.MusicInfo[]) {
+    this.emit('loveListMusicsAdded', musicInfos)
+  }
+
   // 下载列表改变事件
   downloadListUpdate() {
     this.emit('downloadListUpdate')

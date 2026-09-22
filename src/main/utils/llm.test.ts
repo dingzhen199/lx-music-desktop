@@ -1,27 +1,51 @@
-import { describe, expect, it } from 'vitest'
-import { isMaxTokensError } from './llm'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { httpFetch } from './request'
+import { llmComplete } from './llm'
+import type { RecommendLlmParams } from '@common/recommendation'
 
-describe('isMaxTokensError - max_tokens 降档重试的错误识别', () => {
-  it('max_tokens 超限措辞命中', () => {
-    // act & assert
-    expect(isMaxTokensError(new Error('400 max_tokens is too large: 384000. Maximum is 8192'))).toBe(true)
-    expect(isMaxTokensError(new Error('max_tokens 超出模型上限'))).toBe(true)
+vi.mock('./request', () => ({ httpFetch: vi.fn() }))
+const fetchMock = vi.mocked(httpFetch)
+const params: RecommendLlmParams = {
+  apiKey: 'test-key',
+  model: 'test-model',
+  baseUrl: 'https://example.test/v1/',
+  messages: [{ role: 'system', content: '固定规则' }, { role: 'user', content: '歌曲' }],
+}
+beforeEach(() => vi.clearAllMocks())
+
+describe('LLM 协议请求', () => {
+  it('OpenAI 保留消息顺序，输出预算有界且 HTTP 不叠加重试', async() => {
+    fetchMock.mockResolvedValue({ statusCode: 200, body: { choices: [{ message: { content: ' {} ' } }] } } as any)
+    await expect(llmComplete(params)).resolves.toEqual({ content: '{}' })
+    expect(fetchMock).toHaveBeenCalledWith('https://example.test/v1/chat/completions', expect.objectContaining({
+      retryNum: 0, json: expect.objectContaining({ max_tokens: 384_000, messages: params.messages }),
+    }))
   })
 
-  it('新模型 max_completion_tokens 参数报错也命中', () => {
-    // 新模型报错只提 max_completion_tokens，不出现 max_tokens 字样
-    // act & assert
-    expect(isMaxTokensError(new Error("400 Unsupported parameter: 'max_completion_tokens' is not supported with this model"))).toBe(true)
+  it('Anthropic 在固定 system 前缀设置缓存断点', async() => {
+    fetchMock.mockResolvedValue({ statusCode: 200, body: { content: [{ type: 'text', text: '{}' }] } } as any)
+    await expect(llmComplete({ ...params, protocol: 'anthropic' })).resolves.toEqual({ content: '{}' })
+    expect(fetchMock).toHaveBeenCalledWith('https://example.test/v1/messages', expect.objectContaining({
+      json: expect.objectContaining({
+        system: [{ type: 'text', text: '固定规则', cache_control: { type: 'ephemeral' } }],
+        messages: [params.messages[1]],
+      }),
+    }))
   })
 
-  it('unsupported 措辞的 max_tokens 报错命中', () => {
-    // act & assert
-    expect(isMaxTokensError(new Error("400 Unsupported parameter: 'max_tokens'"))).toBe(true)
+  it.each([302, 400, 401, 429, 500])('HTTP %s 只请求一次并抛给统一重试层', async(statusCode) => {
+    fetchMock.mockResolvedValue({ statusCode, body: { error: 'failed' } } as any)
+    await expect(llmComplete(params)).rejects.toThrow(String(statusCode))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
-  it('与 token 参数无关的错误不命中', () => {
-    // act & assert
-    expect(isMaxTokensError(new Error('401 invalid api key'))).toBe(false)
-    expect(isMaxTokensError(new Error('rate limit exceeded'))).toBe(false)
+  it('OpenAI 即使有正文也拒绝被截断的结果', async() => {
+    fetchMock.mockResolvedValue({ statusCode: 200, body: { choices: [{ message: { content: '{"partial":true}' }, finish_reason: 'length' }] } } as any)
+    await expect(llmComplete(params)).rejects.toThrow('截断')
+  })
+
+  it('Anthropic 拒绝 max_tokens 截断', async() => {
+    fetchMock.mockResolvedValue({ statusCode: 200, body: { stop_reason: 'max_tokens', content: [{ type: 'text', text: '{}' }] } } as any)
+    await expect(llmComplete({ ...params, protocol: 'anthropic' })).rejects.toThrow('截断')
   })
 })

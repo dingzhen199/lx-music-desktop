@@ -74,9 +74,9 @@ export const AESTHETIC_CONSTITUTION = `本引擎的审美宪法：
 9. 不无限拟合用户过去。长期喜欢只能做弱 tie-break；此刻的状态优先。
 10. 目标不是五首“各自不错的歌”，而是一段有呼吸、有推进、有少量转折的 listening arc。`
 
-export const ANALYSIS_SYSTEM = `你是一名具有独立音乐审美、丰富情感理解和人性洞察的听者。你的任务不是给音乐打标签，而是理解：用户为什么会在此刻被 Anchor Song 留住，这首歌创造了怎样的精神空间，以及沿着它继续走时，什么必须被保留，什么可以改变。
+export const ANALYSIS_SYSTEM = `${AESTHETIC_CONSTITUTION}
 
-${AESTHETIC_CONSTITUTION}
+你是一名具有独立音乐审美、丰富情感理解和人性洞察的听者。你的任务不是给音乐打标签，而是理解：用户为什么会在此刻被 Anchor Song 留住，这首歌创造了怎样的精神空间，以及沿着它继续走时，什么必须被保留，什么可以改变。
 
 相似不是单维度的。Genre、BPM、艺人相似度只能作为弱信号。你必须优先理解真实的听觉体验：人声音色、真假音与演唱方式、咬字、和声、编制、声音质感、节奏运动、动态结构、旋律与和声、意境、叙事感，以及歌曲真正的情感内核。
 
@@ -106,9 +106,7 @@ export function buildAnchorAnalysisPrompt({ anchor, radius, instruction = '' }: 
   radius: number
   instruction?: string
 }): string {
-  return `${compactContext(anchor, radius, instruction)}
-
-请建立 Anchor 的“听觉与审美画像”（Music Fingerprint + Aesthetic Reading）。不要直接给最终歌曲。
+  return `请建立 Anchor 的“听觉与审美画像”（Music Fingerprint + Aesthetic Reading）。不要直接给最终歌曲。
 请先建立 Anchor 的 Music Fingerprint，但不要停在维度标签。
 
 先回答四个更重要的问题，再做维度拆解：
@@ -198,12 +196,15 @@ H. Narrative Feeling｜叙事感
     }
   ],
   "avoid_transforms":[]
-}`
 }
 
-export const RANK_SYSTEM = `你不是相似度排序器，而是本引擎的 Listening Judgment。你像一个听过很多音乐、也认真理解情感与人的朋友：有自己的审美，但尊重用户此刻的状态与明确边界。
+本轮上下文：
+${compactContext(anchor, radius, instruction)}`
+}
 
-${AESTHETIC_CONSTITUTION}
+export const RANK_SYSTEM = `${AESTHETIC_CONSTITUTION}
+
+你不是相似度排序器，而是本引擎的 Listening Judgment。你像一个听过很多音乐、也认真理解情感与人的朋友：有自己的审美，但尊重用户此刻的状态与明确边界。
 
 你只允许从给定的真实候选池中选择，绝对禁止创造不存在于候选池中的歌曲。
 
@@ -267,27 +268,7 @@ export function buildRankingPrompt({ anchor, radius, instruction = '', analysis,
     state: t.pathState || 'played',
   }))
 
-  return `${compactContext(anchor, radius, instruction)}
-
-Anchor Fingerprint:
-${JSON.stringify(analysis?.fingerprint ?? {}, null, 2)}
-
-Anchor Aesthetic Reading:
-${JSON.stringify(analysis?.aesthetic ?? {}, null, 2)}
-
-Must Preserve:
-${JSON.stringify(analysis?.fingerprint?.must_preserve ?? [])}
-
-Can Drift:
-${JSON.stringify(analysis?.fingerprint?.can_drift ?? [])}
-
-这一轮最近已经走过 / 正在播放 / 已计划的路径（可能为空；state=planned 表示已经排在前面、不要把新补歌当作从 Anchor 重新开始）：
-${JSON.stringify(path, null, 2)}
-
-下面是音乐平台返回的真实候选：
-${JSON.stringify(simplified)}
-
-Ranking 原则：
+  return `Ranking 原则：
 先问自己：它有没有资格成为下一首？不要把“技术上相似”误当成“值得出现”。
 请分两层判断。
 
@@ -325,8 +306,10 @@ Ranking 原则：
 - Anchor 是 vocal song 且人声为关键体验时，instrumental cover 默认强降权。
 - world_breaks 是致命断裂，例如 acoustic folk → four-on-the-floor EDM、核心人声 → 纯器乐、私密声场 → festival dance drop。
 - 距离 <=45 时，有明显 world_break 的候选不应该进入 sequence。
-- Exploration distance ${radius}/100 是最大允许漂移边界，不是“越远越好”。
+- Exploration distance（见本轮上下文）是最大允许漂移边界，不是“越远越好”。
 - 如果你并不了解候选的真实声音特征，把 confidence 标记为 low；不要凭歌名或专辑名想象。
+- vocal_type 单独判断候选有无人声：instrumental=纯器乐，vocal=含人声，不确定填 unknown。continuity.vocal 只代表与起点的人声连续性，不能用来推断有无人声。
+- 用户明确要求器乐时，允许人声转器乐；该变化本身不算 world_break，其余音色、节奏和情绪仍须连续。
 
 严格输出 JSON：
 {
@@ -346,6 +329,7 @@ Ranking 原则：
       "perceptual_distance":0,
       "distance_from_anchor":"near|medium|far",
       "confidence":"high|medium|low",
+      "vocal_type":"instrumental|vocal|unknown",
       "language":"zh|en|ja|ko|other|unknown",
       "language_confidence":"high|medium|low",
       "continuity":{
@@ -361,7 +345,28 @@ Ranking 原则：
     }
   ],
   "sequence":[0,3,7,2,9]
-}`
+}
+
+本轮上下文：
+${compactContext(anchor, radius, instruction)}
+
+Anchor Fingerprint:
+${JSON.stringify(analysis?.fingerprint ?? {}, null, 2)}
+
+Anchor Aesthetic Reading:
+${JSON.stringify(analysis?.aesthetic ?? {}, null, 2)}
+
+Must Preserve:
+${JSON.stringify(analysis?.fingerprint?.must_preserve ?? [])}
+
+Can Drift:
+${JSON.stringify(analysis?.fingerprint?.can_drift ?? [])}
+
+这一轮最近已经走过 / 正在播放 / 已计划的路径（可能为空；state=planned 表示已经排在前面、不要把新补歌当作从 Anchor 重新开始）：
+${JSON.stringify(path, null, 2)}
+
+下面是音乐平台返回的真实候选：
+${JSON.stringify(simplified)}`
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

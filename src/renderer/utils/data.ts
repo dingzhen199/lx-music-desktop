@@ -15,8 +15,11 @@ import {
   saveViewPrevState as saveViewPrevStateFromData,
   saveRecommendMetrics as saveRecommendMetricsFromData,
   getRecommendMetrics as getRecommendMetricsFromData,
+  saveRecommendProfile as saveRecommendProfileFromData,
+  getRecommendProfile as getRecommendProfileFromData,
 } from '@renderer/utils/ipc'
 import type { MetricsState as RecommendMetrics } from '@renderer/core/recommend/session-core'
+import type { ProfileState as RecommendProfile } from '@renderer/core/recommend/profile-core'
 import { throttle } from '@common/utils'
 import { type DEFAULT_SETTING, LIST_IDS } from '@common/constants'
 import { dateFormat } from './index'
@@ -220,4 +223,22 @@ export const getRecommendMetrics = async(): Promise<RecommendMetrics | null> => 
 export const saveRecommendMetrics = (metrics: RecommendMetrics): void => {
   recommendMetrics = metrics
   saveRecommendMetricsFromData(metrics)
+}
+
+// ===== 本地用户画像（TP-2，D8）：单 JSON 快照读写对，沿用 recommendMetrics 口径 =====
+let recommendProfile: RecommendProfile | null
+const initRecommendProfile = async() => {
+  // 类型收口点（同上方指标块注记：ipc 管道为 unknown 透传，本门面按 profile-core 的形状落型）
+  // eslint-disable-next-line require-atomic-updates, @typescript-eslint/no-unnecessary-type-assertion
+  recommendProfile ??= await getRecommendProfileFromData() as RecommendProfile | null
+}
+/** 读取画像快照（无存档为 null，归一口径在 profile-core.hydrateProfile）。 */
+export const getRecommendProfile = async(): Promise<RecommendProfile | null> => {
+  await initRecommendProfile()
+  return recommendProfile ?? null
+}
+/** 写入画像快照：事件直写不节流（量级小——只发生在切歌结算/收藏/跳过回注点，口径同指标快照）。 */
+export const saveRecommendProfile = (profile: RecommendProfile): void => {
+  recommendProfile = profile
+  saveRecommendProfileFromData(profile)
 }

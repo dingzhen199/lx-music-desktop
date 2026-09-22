@@ -135,12 +135,16 @@ export const userApi = reactive<{
   list: LX.UserApi.UserApiInfo[]
   status: boolean
   message?: string
-  apis: Partial<LX.UserApi.UserApiSources>
+  /** 各音源（apiId）的接口处理器；主源与备源同时在场 */
+  apis: Record<string, Partial<LX.UserApi.UserApiSources>>
+  /** 各音源（apiId）的可用音质表 */
+  qualityLists: Record<string, LX.QualityList>
 }>({
   list: [],
   status: false,
   message: 'initing',
   apis: {},
+  qualityLists: {},
 })
 
 export const isShowChangeLog = ref(false)
